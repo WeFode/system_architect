@@ -1,0 +1,5 @@
+*.pdf
+.git
+node_modules
+dist
+.vercel
