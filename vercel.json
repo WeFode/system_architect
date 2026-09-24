@@ -1,0 +1,5 @@
+{
+  "buildCommand": "node scripts/prepare-site.js",
+  "outputDirectory": "dist",
+  "framework": null
+}
