@@ -26,9 +26,10 @@ button.ghost { background: transparent; }
 button.pill { border-radius: 999px; }
 button.pill.on { background: var(--text); color: var(--bg); border-color: var(--text); }
 button:disabled { opacity: .45; cursor: default; }
-input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
 input { width: 110px; }
 input.wide { width: 100%; max-width: 480px; }
+input[type="date"] { width: 150px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .grid { display: grid; gap: 14px; }
 .g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -107,3 +108,36 @@ textarea.note { display: block; width: 100%; min-height: 72px; margin-top: 10px;
 .mask { display: inline-block; padding: 1px 8px; border-radius: 4px; background: var(--fill); color: var(--faint); font-size: 12px; }
 td[data-act="casecell"] { cursor: pointer; }
 td[data-act="casecell"]:hover { background: var(--accent-soft); }
+td[data-act="packcell"] { cursor: pointer; }
+
+/* 模考 */
+.opt.chosen { border-color: var(--accent); background: var(--accent-soft); }
+.dots { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0; }
+.dotbtn { width: 30px; padding: 2px 0; font-size: 12px; text-align: center; }
+.dotbtn.done { background: var(--accent-soft); border-color: var(--accent); }
+.dotbtn.cur { outline: 2px solid var(--text); }
+
+/* 反射训练 */
+.big-flash { cursor: default; min-height: 200px; }
+.big-flash .q { font-size: 22px; }
+.countdown { height: 6px; background: var(--fill); border-radius: 3px; overflow: hidden; margin-top: 18px; }
+.countdown span { display: block; height: 100%; background: var(--mid); animation: countdown 3s linear forwards; }
+@keyframes countdown { from { width: 100%; } to { width: 0; background: var(--bad); } }
+.seq-opt, .judge-opt { display: inline-block; width: auto; margin: 4px 0; }
+.seq-done { margin: 8px 0; padding-left: 22px; color: var(--ok); }
+
+/* 冲刺台与雷达 */
+.task { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; border-bottom: 1px dashed var(--line); }
+.task button { white-space: nowrap; font-size: 12px; margin-top: 3px; }
+.radar tr.click { cursor: pointer; }
+.radar tr.click:hover { background: var(--fill); }
+.tier { display: inline-block; min-width: 22px; text-align: center; border-radius: 4px; font-weight: 600; color: #fff; }
+.tier.tS { background: var(--bad); } .tier.tA { background: var(--mid); } .tier.tB { background: var(--accent); } .tier.tC { background: var(--faint); }
+
+/* 论文工坊 */
+.form-row { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: start; margin: 6px 0; }
+.form-row label { padding-top: 14px; color: var(--muted); }
+textarea.note.short { min-height: 44px; margin-top: 6px; }
+textarea.note.essay { min-height: 460px; }
+pre.skeleton { white-space: pre-wrap; font: inherit; font-size: 13px; background: var(--fill); padding: 12px; border-radius: 6px; max-height: 560px; overflow: auto; }
+@media (max-width: 760px) { .form-row { grid-template-columns: 1fr; } .form-row label { padding-top: 0; } }

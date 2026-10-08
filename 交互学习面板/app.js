@@ -1,23 +1,72 @@
 (function () {
   const KEY = "ruankao-arch-study-v1";
   const DEF = {
-    tab: "outline", mod: "all", filter: "todo", view: "card", idx: 0,
-    status: {}, quiz: { done: 0, right: 0 }, wrong: [], qMod: "all", qMode: "rand", qid: null,
+    tab: "sprint", mod: "all", filter: "due", view: "card", idx: 0, cHour: "",
+    status: {}, srs: {}, quiz: { done: 0, right: 0 }, wrong: [], qMod: "all", qSrc: "all", qMode: "rand", qid: null,
+    exam: null, examLog: [],
     lab: "decide", scn: "seckill", cache: "normal", model: "blp", subj: 1, obj: 2,
     r1: "0.9", r2: "0.9", r3: "0.9", topo: "mix", mttf: "2000", mttr: "2",
     memS: "A0000", memE: "DFFFF", chipK: "32", chipB: "8", unitB: "8",
     stages: "2,1,3", pn: "100", dn: "5", dm: "3", hn: "32",
-    search: "", plan: {}, dark: false,
-    caseMode: "read", caseCat: "all", caseQ: "", caseOpen: {}, caseDraft: {}, caseMark: {}, caseAll: false
+    search: "", dark: false
   };
-  let S = Object.assign({}, DEF, JSON.parse(localStorage.getItem(KEY) || "{}"));
+
+  // 插件格式：KD_PLUG.push(api => ({ defaults, tabs: { id: { name, render, wide } }, acts, regions, subs }))
+  const plugs = (window.KD_PLUG || []).map((f) => f(api()));
+  let S = Object.assign({}, DEF, ...plugs.map((p) => p.defaults || {}), JSON.parse(localStorage.getItem(KEY) || "{}"));
   let flipped = false, picked = null, openRow = null;
   const save = () => localStorage.setItem(KEY, JSON.stringify(S));
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const $ = (id) => document.getElementById(id);
   const modName = (id) => (MODS.find((m) => m.id === id) || { name: "全部" }).name;
+  const today = () => { const d = new Date(); return Math.floor((d.getTime() - d.getTimezoneOffset() * 60000) / 86400000); };
 
-  const TABS = [["outline", "总提纲"], ["map", "考试地图"], ["cards", "口诀背卡"], ["lab", "场景实验室"], ["quiz", "闯关测验"], ["search", "触发词速查"], ["case", "案例对比"], ["tpl", "案例·论文·计划"]];
+  const BOOK = window.BOOK || { cards: [], seqs: [], triggers: [], points: {} };
+  CARDS.push(...BOOK.cards);
+  TRIGGERS.push(...BOOK.triggers);
+  if (window.SEQS) SEQS.push(...BOOK.seqs);
+  const ALLQ = QUIZ.concat(window.BANK || []);
+  const qHour = (q) => { const m = /第 (\d+) 小时/.exec(q.src || ""); return m ? +m[1] : 0; };
+  const qSrcName = (q) => q.src || "口诀题";
+
+  const TAB_ORDER = ["sprint", "radar", "outline", "cards", "drill", "quiz", "case", "essay", "lab", "search", "tactics"];
+  const TABS = {
+    outline: { name: "总提纲", render: renderOutline, wide: true },
+    cards: { name: "口诀背卡", render: renderCards },
+    quiz: { name: "刷题模考", render: renderQuiz },
+    lab: { name: "场景实验室", render: renderLab },
+    search: { name: "速查", render: renderSearch }
+  };
+  const ACTS = {}, SUBS = { lab: "lab" };
+  const REGIONS = { rel: relOut, avail: availOut, mem: memOut, pipe: pipeOut, dead: deadOut, ham: hamOut, search: searchOut };
+  plugs.forEach((p) => {
+    Object.assign(TABS, p.tabs || {});
+    Object.assign(ACTS, p.acts || {});
+    Object.assign(REGIONS, p.regions || {});
+    Object.assign(SUBS, p.subs || {});
+  });
+
+  function api() {
+    return {
+      get S() { return S; }, save: () => save(), render: () => render(), esc: (s) => esc(s), go: (t) => go(t), today: () => today(),
+      modName: (id) => modName(id), modPills: (c, a) => modPills(c, a), cardBody: (c) => cardBody(c), markCard: (id, lv) => markCard(id, lv),
+      srsDue: (id) => srsDue(id), statusCounts: () => statusCounts(), allQ: () => ALLQ, qHour: (q) => qHour(q), book: () => BOOK
+    };
+  }
+
+  // tab[:子页][:状态键=值]
+  function go(target) {
+    const [tab, ...rest] = target.split(":");
+    S.tab = tab;
+    rest.forEach((p) => {
+      const i = p.indexOf("=");
+      if (i > 0) S[p.slice(0, i)] = p.slice(i + 1);
+      else if (SUBS[tab]) S[SUBS[tab]] = p;
+    });
+    if (tab === "cards") { S.idx = 0; flipped = false; if (!rest.some((p) => p.startsWith("cHour="))) S.cHour = ""; }
+    if (tab === "quiz" && S.qMode !== "exam") nextQ();
+    window.scrollTo(0, 0);
+  }
 
   // ---------------- 场景数据 ----------------
   const SCN = [
@@ -72,15 +121,6 @@
     av: { name: "雪崩", load: 100, cause: "大量 key 在同一时间过期，或缓存服务整体宕机，数据库瞬间被压垮。", fix: ["过期时间加随机值，打散失效时间", "Redis 哨兵 / 集群保证缓存高可用", "限流、熔断、降级保护数据库", "本地缓存 + 分布式缓存多级缓存"], life: "整个货架同一时刻全空，或者前台直接停电。", say: "该问题属于缓存雪崩；从预防（随机过期、高可用集群）和兜底（限流降级、多级缓存）两个层面作答。" }
   };
 
-  const PLAN = [
-    ["第 1 周 · 架构核心", ["背完“软件架构”前 20 张卡（风格、质量属性、评估）", "做 3 道案例第 1 题：质量属性归类 + 敏感/权衡点", "看懂效用树，能自己画一棵"]],
-    ["第 2 周 · 分布式与新架构", ["背完缓存、Redis、CAP、分布式事务、微服务、云原生卡", "场景实验室 6 个场景逐个过一遍", "做 2 道数据库/缓存案例题"]],
-    ["第 3 周 · 计算机基础", ["背完“计算机基础”全部卡片", "计算器页把内存、流水线、死锁、可靠性各做 5 题", "测验“计算机基础”正确率到 80%"]],
-    ["第 4 周 · 软工·系统·安全·知产", ["背完软件工程、系统工程、信息安全、知产卡片", "设计模式生活类比默写一遍", "测验全模块一轮，错题进错题本"]],
-    ["第 5 周 · 真题与论文", ["限时做 2 套上午真题", "限时做 2 套案例", "按模板写 2 篇论文（质量属性类 + 架构风格类）"]],
-    ["第 6 周 · 冲刺", ["每天清错题本", "只看考试地图的一页纸骨架 + 模板页", "考前 3 天限时写 1 篇论文，控制在 110 分钟内"]]
-  ];
-
   // ---------------- 工具 ----------------
   function statusCounts() {
     const c = { 0: 0, 1: 0, 2: 0 };
@@ -107,93 +147,82 @@
     </div>`;
   }
 
-  // ---------------- 考试地图 ----------------
-  function renderMap() {
-    const max = 18;
-    const acc = S.quiz.done ? Math.round(S.quiz.right / S.quiz.done * 100) + "%" : "—";
-    return `
-    <div class="grid g3">
-      <div class="panel"><div class="label">三科满分 / 及格线</div><div class="big">75 / 45</div><p class="faint">综合知识、案例分析、论文，一次全过才拿证</p></div>
-      <div class="panel"><div class="label">背卡进度</div><div class="big">${statusCounts()[2]} / ${CARDS.length}</div>${progressBar()}</div>
-      <div class="panel"><div class="label">测验正确率</div><div class="big">${acc}</div><p class="faint">已答 ${S.quiz.done} 题 · 错题本 ${S.wrong.length} 题</p></div>
-    </div>
-    <div class="grid g2" style="margin-top:14px">
-      <div class="panel flat">
-        <h2 style="margin-top:0">综合知识分值分布（估算）</h2>
-        ${WEIGHTS.map(([k, v]) => `<div class="hbar"><span>${esc(k)}</span><div class="track"><div class="fillbar" style="width:${v / max * 100}%"></div></div><span>${v} 分</span></div>`).join("")}
-        <p class="faint">来源：历年真题经验估算，满分 75 分 · 以当年考试大纲为准</p>
-      </div>
-      <div class="panel flat">
-        <h2 style="margin-top:0">考试结构与策略</h2>
-        <table>
-          <tr><th>科目</th><th>形式</th><th>策略</th></tr>
-          <tr><td>综合知识</td><td>75 道单选</td><td>架构 + 基础 + 软工约占 2/3，先稳这三块</td></tr>
-          <tr><td>案例分析</td><td>第 1 题必答，后 4 选 2</td><td>第 1 题拿质量属性；对比选型去「案例对比」背表默写</td></tr>
-          <tr><td>论文</td><td>4 选 1，120 分钟</td><td>一个真实项目 + 质量属性策略素材库打天下</td></tr>
-        </table>
-        <p class="faint">机考，上午综合知识 + 案例，下午论文；具体时长以当年报名公告为准</p>
-      </div>
-    </div>
-    <h2>一页纸骨架：先背口诀，再点进去背卡</h2>
-    <div class="grid g3">
-      ${MODS.map((m) => {
-        const cards = CARDS.filter((c) => c.m === m.id);
-        const done = cards.filter((c) => S.status[c.id] === 2).length;
-        return `<div class="panel">
-          <div class="row" style="justify-content:space-between"><b>${esc(m.name)}</b><span class="faint">约 ${m.score} 分</span></div>
-          <ul style="padding-left:18px;margin:8px 0">${m.hook.map((h) => `<li>${esc(h)}</li>`).join("")}</ul>
-          <div class="row" style="justify-content:space-between"><span class="faint">已掌握 ${done}/${cards.length}</span><button data-act="jump" data-v="${m.id}">背这组卡</button></div>
-        </div>`;
-      }).join("")}
-    </div>`;
+  // ---------------- 背卡：7 天压缩版间隔重复 ----------------
+  // 盒子 0–4 对应间隔 0/1/2/3/5 天：不会当天再来，模糊明天，会了逐级拉长。
+  const GAP = [0, 1, 2, 3, 5];
+  function srsDue(id) {
+    const r = S.srs[id];
+    if (r) return r[1] <= today();
+    return S.status[id] !== 2;
   }
-
-  // ---------------- 背卡 ----------------
-  const matchFilter = (st, f) => f === "all" || (f === "todo" && st !== 2) || String(st) === f;
-  function cardPool() { return CARDS.filter((c) => (S.mod === "all" || c.m === S.mod) && matchFilter(S.status[c.id], S.filter)); }
+  function markCard(id, lv) {
+    S.status[id] = lv;
+    const box = (S.srs[id] || [0])[0];
+    const nb = lv === 0 ? 0 : lv === 1 ? 1 : Math.min(4, Math.max(2, box + 1));
+    S.srs[id] = [nb, today() + GAP[nb]];
+  }
+  const matchFilter = (c, f) => {
+    const st = S.status[c.id];
+    if (f === "due") return srsDue(c.id);
+    return f === "all" || (f === "todo" && st !== 2) || String(st) === f;
+  };
+  function cardPool() {
+    const pool = CARDS.filter((c) => (S.mod === "all" || c.m === S.mod) && (!S.cHour || String(c.hour) === String(S.cHour)) && matchFilter(c, S.filter));
+    if (S.filter === "due") pool.sort((a, b) => (S.status[a.id] == null) - (S.status[b.id] == null));
+    return pool;
+  }
   function cardBody(c) {
     return `<div class="pre">${esc(c.a)}</div>
       ${c.k ? `<div class="sec"><span class="tag">口诀</span><span class="hl">${esc(c.k)}</span></div>` : ""}
       ${c.l ? `<div class="sec pre"><span class="tag">生活类比</span>${esc(c.l)}</div>` : ""}
       ${c.t ? `<div class="sec pre"><span class="tag">考法</span>${esc(c.t)}</div>` : ""}`;
   }
+  function dueStat() {
+    const inMod = CARDS.filter((c) => S.mod === "all" || c.m === S.mod);
+    const rev = inMod.filter((c) => S.status[c.id] != null && srsDue(c.id)).length;
+    const fresh = inMod.filter((c) => S.status[c.id] == null).length;
+    return { rev, fresh };
+  }
   function renderCards() {
     const pool = cardPool();
-    const filters = [["todo", "待攻克"], ["all", "全部"], ["0", "不会"], ["1", "模糊"], ["2", "已会"]];
+    const filters = [["due", "今日任务"], ["todo", "待攻克"], ["all", "全部"], ["0", "不会"], ["1", "模糊"], ["2", "已会"]];
+    const ds = dueStat();
     let body;
     if (!pool.length) {
-      body = `<div class="panel"><p>这个筛选条件下没有卡片了。${S.filter === "todo" ? "这一组已经全部掌握，换一组或切到“全部”复习。" : ""}</p></div>`;
+      body = `<div class="panel"><p>这个筛选条件下没有卡片了。${S.filter === "due" ? "今天这组的复习已经清空，明天再来，或者切到别的模块。" : S.filter === "todo" ? "这一组已经全部掌握，换一组或切到“全部”复习。" : ""}</p></div>`;
     } else if (S.view === "card") {
       const i = S.idx % pool.length, c = pool[i];
+      const isNew = S.status[c.id] == null;
       body = `
       <div class="flash" data-act="flip">
-        <div class="row" style="justify-content:space-between"><span class="tag">${esc(modName(c.m))}</span><span class="faint">${i + 1} / ${pool.length} · 点击卡片${flipped ? "收起" : "翻面"}</span></div>
+        <div class="row" style="justify-content:space-between"><span><span class="tag">${esc(modName(c.m))}</span>${c.hour ? `<span class="tag">第 ${c.hour} 小时</span>` : ""}${isNew ? `<span class="tag">新卡</span>` : ""}</span><span class="faint">${i + 1} / ${pool.length} · 点击卡片${flipped ? "收起" : "翻面"}</span></div>
         <div class="q">${esc(c.q)}</div>
         ${flipped ? cardBody(c) : `<p class="faint">先在心里说出答案和口诀，再翻面核对。</p>`}
       </div>
       <div class="row" style="margin-top:12px">
         <button data-act="prev">上一张</button>
         <span style="flex:1"></span>
-        <button data-act="mark" data-v="0">不会</button>
-        <button data-act="mark" data-v="1">模糊</button>
+        <button data-act="mark" data-v="0">不会（今天再来）</button>
+        <button data-act="mark" data-v="1">模糊（明天）</button>
         <button class="primary" data-act="mark" data-v="2">会了</button>
       </div>`;
     } else {
       body = `<div class="panel">${pool.map((c) => `<div class="listrow" data-act="row" data-v="${c.id}">
-        <span class="dot ${S.status[c.id] != null ? "s" + S.status[c.id] : ""}"></span>${esc(c.q)} <span class="faint">· ${esc(modName(c.m))}</span>
+        <span class="dot ${S.status[c.id] != null ? "s" + S.status[c.id] : ""}"></span>${esc(c.q)} <span class="faint">· ${esc(modName(c.m))}${c.hour ? " · 第 " + c.hour + " 小时" : ""}</span>
         ${openRow === c.id ? `<div class="ans">${cardBody(c)}</div>` : ""}</div>`).join("")}</div>`;
     }
     return `
       ${modPills(S.mod, "mod")}
       <div class="row" style="margin:10px 0 14px">
         ${filters.map(([v, n]) => `<button class="pill ${S.filter === v ? "on" : ""}" data-act="filter" data-v="${v}">${n}</button>`).join("")}
+        ${S.cHour ? `<button class="pill on" data-act="clearhour">只看第 ${esc(S.cHour)} 小时 ×</button>` : ""}
         <span style="flex:1"></span>
         <button class="pill ${S.view === "card" ? "on" : ""}" data-act="view" data-v="card">卡片模式</button>
         <button class="pill ${S.view === "list" ? "on" : ""}" data-act="view" data-v="list">列表模式</button>
       </div>
+      <p class="faint" style="margin:-4px 0 12px">今日任务：到期复习 ${ds.rev} 张 + 新卡 ${ds.fresh} 张。不会 → 当天再出现；模糊 → 明天；会了 → 2、3、5 天后再出现。</p>
       ${body}
-      <div style="margin-top:16px">${progressBar()}</div>
-      <p class="faint">复习节奏：1 天 → 2 天 → 4 天 → 7 天 → 15 天，只复习“待攻克”。</p>`;
+      <div style="margin-top:16px">${progressBar()}</div>`;
   }
 
   // ---------------- 场景实验室 ----------------
@@ -386,208 +415,197 @@
     return `<p class="faint" style="margin-top:10px">找最小 k，使 2^k ≥ n + k + 1：2^${k} = ${Math.pow(2, k)} ≥ ${n + k + 1}</p><div class="big">${k} 位</div>`;
   }
 
-  // ---------------- 测验 ----------------
-  function quizPool() {
-    return QUIZ.filter((q) => (S.qMod === "all" || q.m === S.qMod) && (S.qMode === "rand" || S.wrong.includes(q.id)));
+  // ---------------- 刷题与限时模考 ----------------
+  const SRCS = [["all", "全部来源"], ["own", "口诀题"], ["prac", "书本练习"], ["m1", "模拟卷Ⅰ"], ["m2", "模拟卷Ⅱ"]];
+  function srcMatch(q) {
+    const f = S.qSrc;
+    if (f === "all") return true;
+    if (f === "own") return !q.src;
+    if (f === "prac") return /练习/.test(q.src || "");
+    if (f === "m1") return q.src === "模拟卷Ⅰ";
+    if (f === "m2") return q.src === "模拟卷Ⅱ";
+    if (/^h\d+$/.test(f)) return qHour(q) === +f.slice(1);
+    return true;
   }
+  const quizBase = () => ALLQ.filter((q) => (S.qMod === "all" || q.m === S.qMod) && srcMatch(q));
+  const quizPool = () => quizBase().filter((q) => S.qMode !== "wrong" || S.wrong.includes(q.id));
+  const findQ = (id) => ALLQ.find((x) => x.id === id);
   function nextQ() {
-    const pool = quizPool().filter((q) => q.id !== S.qid);
     const all = quizPool();
+    const pool = all.filter((q) => q.id !== S.qid);
     const src = pool.length ? pool : all;
     S.qid = src.length ? src[Math.floor(Math.random() * src.length)].id : null;
     picked = null;
   }
-  function renderQuiz() {
-    let q = QUIZ.find((x) => x.id === S.qid);
-    if (!q || !quizPool().some((x) => x.id === q.id)) { nextQ(); q = QUIZ.find((x) => x.id === S.qid); }
+  const optHtml = (q, i, cls, act) => `<button class="${cls}" data-act="${act}" data-v="${i}">${"ABCD"[i]}. ${esc(q.o[i])}</button>`;
+  const qStem = (q) => `<p class="q pre" style="font-size:16px;font-weight:600;margin:10px 0">${esc(q.q)}</p>`;
+  function quizHead() {
     const acc = S.quiz.done ? Math.round(S.quiz.right / S.quiz.done * 100) : 0;
+    const hourPill = /^h\d+$/.test(S.qSrc) ? `<button class="pill on" data-act="qsrc" data-v="all">只看第 ${S.qSrc.slice(1)} 小时练习 ×</button>` : "";
+    return `${modPills(S.qMod, "qmod")}
+      <div class="row" style="margin:10px 0 0">${SRCS.map(([v, n]) => `<button class="pill ${S.qSrc === v ? "on" : ""}" data-act="qsrc" data-v="${v}">${n}</button>`).join("")}${hourPill}
+        <span class="faint">当前筛选 ${quizBase().length} 题</span></div>
+      <div class="row" style="margin:10px 0 14px">
+        <button class="pill ${S.qMode === "rand" ? "on" : ""}" data-act="qmode" data-v="rand">随机刷题</button>
+        <button class="pill ${S.qMode === "wrong" ? "on" : ""}" data-act="qmode" data-v="wrong">错题重练（${S.wrong.length}）</button>
+        <button class="pill ${S.qMode === "exam" ? "on" : ""}" data-act="qmode" data-v="exam">限时模考</button>
+        <span style="flex:1"></span><span class="faint">已答 ${S.quiz.done} · 正确率 ${acc}%</span>
+        <button class="ghost" data-act="resetq">清零统计</button>
+      </div>`;
+  }
+  function renderQuiz() {
+    if (S.qMode === "exam") return quizHead() + renderExam();
+    let q = findQ(S.qid);
+    if (!q || !quizPool().some((x) => x.id === q.id)) { nextQ(); q = findQ(S.qid); }
     let body;
-    if (!q) body = `<div class="panel"><p>${S.qMode === "wrong" ? "错题本是空的，切回“随机刷题”继续。" : "这个模块暂时没有题目。"}</p></div>`;
+    if (!q) body = `<div class="panel"><p>${S.qMode === "wrong" ? "错题本在这个筛选下是空的，切回“随机刷题”继续。" : "这个筛选条件下暂时没有题目。"}</p></div>`;
     else body = `<div class="panel">
-        <div class="row" style="justify-content:space-between"><span class="tag">${esc(modName(q.m))}</span>${S.wrong.includes(q.id) ? `<span class="faint">错题本中</span>` : ""}</div>
-        <p class="q" style="font-size:17px;font-weight:600;margin:10px 0">${esc(q.q)}</p>
+        <div class="row" style="justify-content:space-between"><span><span class="tag">${esc(modName(q.m))}</span><span class="tag">${esc(qSrcName(q))}</span></span>${S.wrong.includes(q.id) ? `<span class="faint">错题本中</span>` : ""}</div>
+        ${qStem(q)}
         ${q.o.map((o, i) => {
           let cls = "opt";
           if (picked != null) { if (i === q.r) cls += " right"; else if (i === picked) cls += " wrong"; }
           return `<button class="${cls}" data-act="pick" data-v="${i}" ${picked != null ? "disabled" : ""}>${"ABCD"[i]}. ${esc(o)}</button>`;
         }).join("")}
-        ${picked != null ? `<p style="margin-top:10px"><b class="${picked === q.r ? "ok" : "bad"}">${picked === q.r ? "答对了" : "答错了，正确答案是 " + "ABCD"[q.r]}</b>　${esc(q.w)}</p>
+        ${picked != null ? `<p class="pre" style="margin-top:10px"><b class="${picked === q.r ? "ok" : "bad"}">${picked === q.r ? "答对了" : "答错了，正确答案是 " + "ABCD"[q.r]}</b>　${esc(q.w)}</p>
           <div class="row" style="margin-top:8px"><button class="primary" data-act="nextq">下一题</button>${S.wrong.includes(q.id) ? `<button data-act="unwrong">已掌握，移出错题本</button>` : ""}</div>` : ""}
       </div>`;
-    return `
-      ${modPills(S.qMod, "qmod")}
-      <div class="row" style="margin:10px 0 14px">
-        <button class="pill ${S.qMode === "rand" ? "on" : ""}" data-act="qmode" data-v="rand">随机刷题</button>
-        <button class="pill ${S.qMode === "wrong" ? "on" : ""}" data-act="qmode" data-v="wrong">错题重练（${S.wrong.length}）</button>
-        <span style="flex:1"></span><span class="faint">已答 ${S.quiz.done} · 正确率 ${acc}%</span>
-        <button class="ghost" data-act="resetq">清零统计</button>
-      </div>${body}`;
+    return quizHead() + body;
   }
+  const EXAM_SIZES = [[20, 40], [45, 90], [75, 150]];
+  function examLeft() {
+    const e = S.exam;
+    return Math.max(0, Math.round(e.lim * 60 - (Date.now() - e.start) / 1000));
+  }
+  const clock = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+  function renderExam() {
+    const e = S.exam;
+    if (!e) {
+      const n = quizBase().length;
+      return `<div class="panel">
+        <h2 style="margin-top:0">限时模考</h2>
+        <p>从当前筛选（模块 + 来源）的 ${n} 道题里随机抽题，按真实节奏计时：上午综合知识 75 题 150 分钟，平均每题 2 分钟。交卷前不显示对错，交卷后按模块出成绩单，错题自动进错题本。</p>
+        <div class="row" style="margin-top:10px">${EXAM_SIZES.map(([k, m]) => `<button class="primary" data-act="examstart" data-v="${k}">${k} 题 · ${m} 分钟</button>`).join("")}</div>
+        <p class="faint">题量不够时按实际题数出卷。想专攻模拟卷就先把来源切到“模拟卷Ⅰ/Ⅱ”。</p>
+      </div>${examHistory()}`;
+    }
+    if (e.done) return examReport();
+    const q = findQ(e.ids[e.i]), mine = e.ans[q.id];
+    const answered = Object.keys(e.ans).length;
+    return `<div class="panel">
+      <div class="row" style="justify-content:space-between"><b>第 ${e.i + 1} / ${e.ids.length} 题</b><span>剩余 <b id="examClock">${clock(examLeft())}</b> · 已答 ${answered}</span></div>
+      <div class="dots">${e.ids.map((id, i) => `<button class="dotbtn ${i === e.i ? "cur" : ""} ${e.ans[id] != null ? "done" : ""}" data-act="examgo" data-v="${i}">${i + 1}</button>`).join("")}</div>
+      <div class="row"><span class="tag">${esc(modName(q.m))}</span></div>
+      ${qStem(q)}
+      ${q.o.map((_, i) => optHtml(q, i, "opt" + (mine === i ? " chosen" : ""), "exampick")).join("")}
+      <div class="row" style="margin-top:10px">
+        <button data-act="examgo" data-v="${e.i - 1}" ${e.i === 0 ? "disabled" : ""}>上一题</button>
+        <button data-act="examgo" data-v="${e.i + 1}" ${e.i === e.ids.length - 1 ? "disabled" : ""}>下一题</button>
+        <span style="flex:1"></span>
+        <button class="ghost" data-act="examquit">放弃本场</button>
+        <button class="primary" data-act="examsubmit">交卷</button>
+      </div>
+    </div>`;
+  }
+  function examReport() {
+    const e = S.exam, qs = e.ids.map(findQ);
+    const right = qs.filter((q) => e.ans[q.id] === q.r).length;
+    const by = {};
+    qs.forEach((q) => { const b = by[q.m] || (by[q.m] = { n: 0, r: 0 }); b.n++; if (e.ans[q.id] === q.r) b.r++; });
+    const scaled = Math.round(right / qs.length * 75);
+    const wrong = qs.filter((q) => e.ans[q.id] !== q.r);
+    return `<div class="panel">
+      <h2 style="margin-top:0">成绩单</h2>
+      <div class="grid g3">
+        <div><div class="label">答对</div><div class="big">${right} / ${qs.length}</div></div>
+        <div><div class="label">折算 75 分制</div><div class="big ${scaled >= 45 ? "ok" : "bad"}">${scaled}</div><p class="faint">45 分及格</p></div>
+        <div><div class="label">用时</div><div class="big">${Math.round((e.end - e.start) / 60000)} 分钟</div></div>
+      </div>
+      <table style="margin-top:12px"><tr><th>模块</th><th>答对</th><th>正确率</th></tr>
+        ${Object.entries(by).sort((a, b) => a[1].r / a[1].n - b[1].r / b[1].n).map(([m, b]) => `<tr><td>${esc(modName(m))}</td><td>${b.r} / ${b.n}</td><td class="${b.r / b.n >= 0.6 ? "ok" : "bad"}">${Math.round(b.r / b.n * 100)}%</td></tr>`).join("")}
+      </table>
+      <div class="row" style="margin-top:12px"><button class="primary" data-act="examnew">再来一场</button><button data-act="qmode" data-v="wrong">去错题本</button></div>
+    </div>
+    <h3>错题解析（${wrong.length}）</h3>
+    ${wrong.map((q) => `<div class="panel" style="margin:8px 0"><div class="row"><span class="tag">${esc(modName(q.m))}</span><span class="tag">${esc(qSrcName(q))}</span></div>${qStem(q)}
+      <p>你的答案：<b class="bad">${e.ans[q.id] != null ? "ABCD"[e.ans[q.id]] : "未答"}</b>　正确答案：<b class="ok">${"ABCD"[q.r]}. ${esc(q.o[q.r])}</b></p>
+      <p class="faint pre">${esc(q.w)}</p></div>`).join("")}`;
+  }
+  function examHistory() {
+    if (!S.examLog.length) return "";
+    return `<h3>历史模考</h3><table><tr><th>日期</th><th>题数</th><th>答对</th><th>折算</th></tr>
+      ${S.examLog.slice(-10).reverse().map((l) => `<tr><td>${esc(l.d)}</td><td>${l.n}</td><td>${l.r}</td><td class="${l.s >= 45 ? "ok" : "bad"}">${l.s}</td></tr>`).join("")}</table>`;
+  }
+  function examSubmit() {
+    const e = S.exam;
+    if (!e || e.done) return;
+    e.done = true; e.end = Date.now();
+    const qs = e.ids.map(findQ);
+    let right = 0;
+    qs.forEach((q) => {
+      if (e.ans[q.id] === q.r) right++;
+      else if (!S.wrong.includes(q.id)) S.wrong.push(q.id);
+    });
+    S.quiz.done += qs.length; S.quiz.right += right;
+    S.examLog.push({ d: new Date().toLocaleDateString(), n: qs.length, r: right, s: Math.round(right / qs.length * 75) });
+  }
+  setInterval(() => {
+    if (S.tab !== "quiz" || S.qMode !== "exam" || !S.exam || S.exam.done) return;
+    const left = examLeft(), el = $("examClock");
+    if (el) el.textContent = clock(left);
+    if (left <= 0) { examSubmit(); render(); }
+  }, 1000);
 
   // ---------------- 速查 ----------------
   function renderSearch() {
-    return `<p class="muted">输入题干里的关键词（如“热点”“双向绑定”“不上读”），同时搜索触发词表和全部背卡。</p>
+    return `<p class="muted">输入题干里的关键词（如“热点”“双向绑定”“不上读”），同时搜索触发词表、背卡、顺序表和题库。</p>
       <input class="wide" id="searchBox" data-bind="search" data-region="search" placeholder="输入关键词……" value="${esc(S.search)}">
       <div id="region-search" style="margin-top:14px">${searchOut()}</div>`;
   }
   function searchOut() {
     const k = S.search.trim().toLowerCase();
-    const trig = TRIGGERS.filter(([a, b]) => !k || (a + b).toLowerCase().includes(k));
-    const cards = k ? CARDS.filter((c) => [c.q, c.a, c.k, c.l, c.t].join(" ").toLowerCase().includes(k)) : [];
+    const has = (...xs) => xs.join(" ").toLowerCase().includes(k);
+    const trig = TRIGGERS.filter(([a, b]) => !k || has(a, b));
+    const cards = k ? CARDS.filter((c) => has(c.q, c.a, c.k, c.l, c.t)) : [];
+    const seqs = k && window.SEQS ? SEQS.filter((s) => has(s.name, s.k, ...s.items)) : [];
+    const qs = k ? ALLQ.filter((q) => has(q.q, ...q.o, q.w)).slice(0, 30) : [];
     return `<h3>题干触发词 → 答案（${trig.length}）</h3>
       <table><tr><th style="width:50%">看到</th><th>选 / 想到</th></tr>${trig.map(([a, b]) => `<tr><td>${esc(a)}</td><td class="hl">${esc(b)}</td></tr>`).join("")}</table>
-      ${k ? `<h3>相关背卡（${cards.length}）</h3>${cards.map((c) => `<div class="panel" style="margin:8px 0"><b>${esc(c.q)}</b> <span class="faint">· ${esc(modName(c.m))}</span><div style="margin-top:6px">${cardBody(c)}</div></div>`).join("")}` : ""}`;
-  }
-
-  // ---------------- 案例对比（背题 / 默写） ----------------
-  function caseShown(item, ri, ci) {
-    if (S.caseMode !== "write" || ci === 0 || S.caseAll) return true;
-    return !!S.caseOpen[item.id + "-" + ri + "-" + ci];
-  }
-  function caseKeys(item) {
-    const keys = [];
-    item.rows.forEach((row, ri) => row.forEach((_, ci) => { if (ci) keys.push(item.id + "-" + ri + "-" + ci); }));
-    return keys;
-  }
-  function materializeCase() {
-    if (!S.caseAll) return;
-    S.caseAll = false;
-    CASE_COMPARE.forEach((item) => caseKeys(item).forEach((k) => { S.caseOpen[k] = 1; }));
-  }
-  function caseList() {
-    const k = S.caseQ.trim().toLowerCase();
-    const items = CASE_COMPARE.filter((item) => {
-      if (S.caseCat !== "all" && item.category !== S.caseCat) return false;
-      if (!k) return true;
-      return [item.title, item.tip, item.category, ...item.headers, ...item.rows.flat()].join(" ").toLowerCase().includes(k);
-    });
-    if (!items.length) return `<div class="panel"><p>没有对上的对比题。换个分类，或把搜索词缩短。</p></div>`;
-    return items.map((item) => {
-      const head = item.headers.map((h) => `<th>${esc(h)}</th>`).join("");
-      const body = item.rows.map((row, ri) => `<tr>${row.map((cell, ci) => {
-        const shown = caseShown(item, ri, ci);
-        const act = S.caseMode === "write" && ci > 0 ? ` data-act="casecell" data-v="${item.id}-${ri}-${ci}"` : "";
-        const inner = shown ? esc(cell) : `<span class="mask">点击显示</span>`;
-        return `<td${act}>${ci === 0 ? `<b>${inner}</b>` : inner}</td>`;
-      }).join("")}</tr>`).join("");
-      const mark = S.caseMark[item.id];
-      const marks = [["0", "不会"], ["1", "模糊"], ["2", "会了"]].map(([v, n]) =>
-        `<button class="pill ${String(mark) === v ? "on" : ""}" data-act="casemark" data-v="${item.id}:${v}">${n}</button>`).join("");
-      const write = S.caseMode === "write";
-      return `<div class="panel" style="margin-bottom:14px">
-        <div class="row" style="justify-content:space-between"><b>${item.id}. ${esc(item.title)}</b><span class="tag">${esc(item.category)}</span></div>
-        <div class="case-scroll"><table><tr>${head}</tr>${body}</table></div>
-        <p class="sec pre" style="margin-top:10px"><span class="tag">踩分</span>${esc(item.tip)}</p>
-        ${write ? `<textarea class="note" data-draft="${item.id}" placeholder="先写结论一句，再按维度列差异，最后扣题干原词。">${esc(S.caseDraft[item.id] || "")}</textarea>
-          <div class="row" style="margin-top:8px"><button data-act="casecard" data-v="${item.id}">显隐本题答案</button>${marks}</div>` : `<div class="row" style="margin-top:8px">${marks}</div>`}
-      </div>`;
-    }).join("");
-  }
-  function renderCase() {
-    const cats = ["all"].concat([...new Set(CASE_COMPARE.map((c) => c.category))]);
-    const known = CASE_COMPARE.filter((c) => S.caseMark[c.id] === 2).length;
-    const names = { all: "全部" };
-    return `
-      <p class="muted">案例分析里的对比选型题：背题直接看表，默写先遮住方案列，自己写完再点开核对。勾过的掌握程度保存在本机。</p>
-      <div class="grid g3" style="margin:12px 0">
-        ${CASE_RULES.map(([t, d]) => `<div class="panel"><b>${esc(t)}</b><p class="faint" style="margin-top:6px">${esc(d)}</p></div>`).join("")}
-      </div>
-      <p class="faint">${esc(CASE_FRAME)} 已掌握 ${known} / ${CASE_COMPARE.length} 题。</p>
-      <div class="row" style="margin:12px 0">
-        ${cats.map((c) => `<button class="pill ${S.caseCat === c ? "on" : ""}" data-act="casecat" data-v="${esc(c)}">${esc(names[c] || c)}</button>`).join("")}
-      </div>
-      <div class="row" style="margin-bottom:14px">
-        <button class="pill ${S.caseMode === "read" ? "on" : ""}" data-act="casemode" data-v="read">背题</button>
-        <button class="pill ${S.caseMode === "write" ? "on" : ""}" data-act="casemode" data-v="write">默写</button>
-        <input class="wide" data-bind="caseQ" data-region="case" placeholder="搜索对比题，如 gRPC、权衡点" value="${esc(S.caseQ)}">
-        ${S.caseMode === "write" ? `<button data-act="caseall">${S.caseAll ? "隐藏全部答案" : "显示全部答案"}</button>` : ""}
-      </div>
-      <div id="region-case">${caseList()}</div>`;
-  }
-
-  // ---------------- 模板与计划 ----------------
-  function renderTpl() {
-    const segs = [["选题", 5], ["列提纲", 10], ["摘要", 15], ["正文", 80], ["检查", 10]];
-    const colors = ["var(--faint)", "var(--mid)", "var(--accent)", "var(--ok)", "var(--bad)"];
-    return `
-    <p class="muted">对比选型（单体和微服务、REST 和 gRPC、CP 和 AP、缓存策略）在「案例对比」里背表和默写。质量属性第 1 题用下面的骨架。</p>
-    <h2>案例分析第 1 题（必答）答题模板</h2>
-    <table>
-      <tr><th>题型</th><th>答题骨架</th></tr>
-      <tr><td>质量属性归类</td><td>“属于 <b>XX</b> 质量属性，原因是该描述关注 <b>……（引用题干原词）</b>。”先按判定树：时间/并发 → 性能；故障/恢复 → 可用性；攻击/授权 → 安全性；改动/人天 → 可修改性。</td></tr>
-      <tr><td>敏感点 / 权衡点 / 风险点</td><td>看这个决策影响几个质量属性：一个 → 敏感点；多个且此消彼长 → 权衡点；可能出问题 → 风险点。</td></tr>
-      <tr><td>架构风格对比选择</td><td>风格特点 → 与本系统需求的匹配 → 结论；每一点都带上题干原词。</td></tr>
-      <tr><td>效用树填空</td><td>第二层填质量属性名，叶子填场景编号；注意“场景六要素”的词。</td></tr>
-    </table>
-    <p class="faint">得分三件套：术语 + 题干原词 + 因果。每小问按分值写要点，一般 1 个要点 1–2 分。</p>
-
-    <h2>其他案例题型</h2>
-    <table>
-      <tr><th>题型</th><th>答题骨架</th></tr>
-      <tr><td>数据库 / 缓存</td><td>问题成因 → 方案（布隆过滤器、互斥锁、随机过期、Cache Aside）→ 优缺点</td></tr>
-      <tr><td>Redis 选型</td><td>数据类型匹配（ZSet 排行、Hash 对象、List 队列、Set 去重）+ 持久化选择（RDB/AOF）</td></tr>
-      <tr><td>反规范化</td><td>手段 → 性能收益 → 一致性保障（触发器 / 应用同步 / 批处理）</td></tr>
-      <tr><td>Web / 微服务</td><td>网关、注册中心、负载均衡、熔断限流降级、消息队列削峰解耦</td></tr>
-      <tr><td>嵌入式</td><td>分层架构、实时调度、余度与容错、ARINC 653 时空分区</td></tr>
-      <tr><td>系统建模</td><td>DFD 补全（找黑洞、奇迹）、E-R 补全、用例/类/顺序/状态图</td></tr>
-    </table>
-
-    <h2>论文：120 分钟时间分配</h2>
-    <div class="bar" style="height:14px">${segs.map(([n, v], i) => `<span title="${n}" style="width:${v / 120 * 100}%;background:${colors[i]}"></span>`).join("")}</div>
-    <div class="row" style="margin-top:6px">${segs.map(([n, v], i) => `<span class="faint"><span class="dot" style="background:${colors[i]}"></span>${n} ${v} 分钟</span>`).join("")}</div>
-    <div class="grid g2" style="margin-top:14px">
-      <div class="panel flat"><h3 style="margin-top:0">结构与字数</h3>
-        <table>
-          <tr><td>摘要</td><td>300–330 字</td><td>项目 + 规模 + 我的角色 + 方法 + 效果</td></tr>
-          <tr><td>项目背景</td><td>400–500 字</td><td>时间、单位、规模、周期、团队、我的职责</td></tr>
-          <tr><td>理论论述</td><td>300–500 字</td><td>回答题目第 2 问：概念 + 分类/步骤</td></tr>
-          <tr><td>实践展开</td><td>1200–1500 字</td><td>3–4 个点，每点“问题 → 方案 → 效果（带数字）”</td></tr>
-          <tr><td>总结</td><td>200–300 字</td><td>成果 + 不足 + 改进方向</td></tr>
-        </table></div>
-      <div class="panel flat"><h3 style="margin-top:0">质量属性 → 策略素材库</h3>
-        <p><b>性能</b>：多级缓存、异步削峰、读写分离、分库分表、CDN、连接池、索引优化</p>
-        <p><b>可用性</b>：集群 + 负载均衡、主备切换、限流熔断降级、异地多活、健康检查</p>
-        <p><b>安全性</b>：统一认证（OAuth2/JWT）、RBAC、HTTPS、加密脱敏、审计日志、WAF</p>
-        <p><b>可修改性</b>：分层、模块化、DDD 限界上下文、接口隔离、配置中心、插件化</p>
-        <p><b>可伸缩性</b>：无状态服务、容器弹性伸缩、数据分片</p>
-        <p class="bad">雷区：没有真实项目细节；摘要与正文对不上；把微服务、3PC 写成银弹；跑题到项目管理；字数不足。</p></div>
-    </div>
-
-    <h2>6 周冲刺计划（按 11 月上旬考试倒排，勾选自动保存）</h2>
-    <div class="grid g3">${PLAN.map(([w, items], wi) => `<div class="panel"><b>${esc(w)}</b>${items.map((it, ii) => {
-      const id = wi + "-" + ii;
-      return `<label class="check"><input type="checkbox" data-act="plan" data-v="${id}" ${S.plan[id] ? "checked" : ""}><span class="${S.plan[id] ? "faint" : ""}">${esc(it)}</span></label>`;
-    }).join("")}</div>`).join("")}</div>`;
+      ${k ? `<h3>相关背卡（${cards.length}）</h3>${cards.map((c) => `<div class="panel" style="margin:8px 0"><b>${esc(c.q)}</b> <span class="faint">· ${esc(modName(c.m))}</span><div style="margin-top:6px">${cardBody(c)}</div></div>`).join("")}` : ""}
+      ${seqs.length ? `<h3>顺序表（${seqs.length}）</h3>${seqs.map((s) => `<div class="panel" style="margin:8px 0"><b>${esc(s.name)}</b><p>${s.items.map(esc).join(" → ")}</p><p class="faint">口诀：${esc(s.k)}</p></div>`).join("")}` : ""}
+      ${qs.length ? `<h3>相关题目（${qs.length}${qs.length === 30 ? "，只显示前 30" : ""}）</h3>${qs.map((q) => `<div class="panel" style="margin:8px 0"><span class="tag">${esc(qSrcName(q))}</span><p class="pre">${esc(q.q)}</p><p class="ok">${"ABCD"[q.r]}. ${esc(q.o[q.r])}</p></div>`).join("")}` : ""}`;
   }
 
   // ---------------- 渲染与事件 ----------------
   function render() {
+    if (!TABS[S.tab]) S.tab = "sprint";
+    const tab = TABS[S.tab];
     document.body.classList.toggle("dark", !!S.dark);
-    document.body.classList.toggle("wide", S.tab === "outline" || S.tab === "case");
-    $("tabs").innerHTML = TABS.map(([v, n]) => `<button class="pill ${S.tab === v ? "on" : ""}" data-act="tab" data-v="${v}">${n}</button>`).join("");
-    $("app").innerHTML = { outline: renderOutline, map: renderMap, cards: renderCards, lab: renderLab, quiz: renderQuiz, search: renderSearch, case: renderCase, tpl: renderTpl }[S.tab]();
+    document.body.classList.toggle("wide", !!tab.wide);
+    $("tabs").innerHTML = TAB_ORDER.filter((id) => TABS[id]).map((id) => `<button class="pill ${S.tab === id ? "on" : ""}" data-act="tab" data-v="${id}">${TABS[id].name}</button>`).join("");
+    $("app").innerHTML = tab.render();
     save();
   }
-  const REGIONS = { rel: relOut, avail: availOut, mem: memOut, pipe: pipeOut, dead: deadOut, ham: hamOut, search: searchOut, case: caseList };
 
   document.addEventListener("click", (e) => {
     const el = e.target.closest("[data-act]");
     if (!el) return;
     const v = el.dataset.v;
     switch (el.dataset.act) {
-      case "tab": S.tab = v; break;
+      case "tab": S.tab = v; window.scrollTo(0, 0); break;
+      case "go": go(v); break;
       case "jumpmd": { const n = document.getElementById(v); if (n) n.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
-      case "jump": S.mod = v; S.filter = "todo"; S.idx = 0; S.tab = "cards"; flipped = false; break;
       case "mod": S.mod = v; S.idx = 0; flipped = false; break;
       case "filter": S.filter = v; S.idx = 0; flipped = false; break;
+      case "clearhour": S.cHour = ""; S.idx = 0; break;
       case "view": S.view = v; break;
       case "flip": flipped = !flipped; break;
       case "prev": { const n = cardPool().length || 1; S.idx = (S.idx - 1 + n) % n; flipped = false; break; }
       case "mark": {
         const pool = cardPool(); if (!pool.length) return;
-        const c = pool[S.idx % pool.length], lv = +v;
-        S.status[c.id] = lv;
-        if (matchFilter(lv, S.filter)) S.idx++;
+        const c = pool[S.idx % pool.length];
+        markCard(c.id, +v);
+        if (cardPool().some((x) => x.id === c.id)) S.idx++;
         flipped = false; break;
       }
       case "row": openRow = openRow === v ? null : v; break;
@@ -596,10 +614,11 @@
       case "cache": S.cache = v; break;
       case "model": S.model = v; break;
       case "qmod": S.qMod = v; nextQ(); break;
+      case "qsrc": S.qSrc = v; nextQ(); break;
       case "qmode": S.qMode = v; nextQ(); break;
       case "pick": {
         if (picked != null) return;
-        const q = QUIZ.find((x) => x.id === S.qid); picked = +v;
+        const q = findQ(S.qid); picked = +v;
         S.quiz.done++;
         if (picked === q.r) S.quiz.right++;
         else if (!S.wrong.includes(q.id)) S.wrong.push(q.id);
@@ -608,55 +627,46 @@
       case "nextq": nextQ(); break;
       case "unwrong": S.wrong = S.wrong.filter((x) => x !== S.qid); nextQ(); break;
       case "resetq": if (confirm("清零测验统计？错题本会保留。")) S.quiz = { done: 0, right: 0 }; break;
-      case "plan": S.plan[v] = el.checked; break;
-      case "casemode": S.caseMode = v; break;
-      case "casecat": S.caseCat = v; break;
-      case "caseall":
-        if (S.caseAll) { S.caseAll = false; S.caseOpen = {}; }
-        else S.caseAll = true;
-        break;
-      case "casecell":
-        if (S.caseMode !== "write") return;
-        materializeCase();
-        if (S.caseOpen[v]) delete S.caseOpen[v];
-        else S.caseOpen[v] = 1;
-        break;
-      case "casecard": {
-        const item = CASE_COMPARE.find((x) => String(x.id) === v);
-        if (!item) return;
-        materializeCase();
-        const keys = caseKeys(item);
-        const allOn = keys.every((k) => S.caseOpen[k]);
-        keys.forEach((k) => { if (allOn) delete S.caseOpen[k]; else S.caseOpen[k] = 1; });
+      case "examstart": {
+        const n = +v, lim = (EXAM_SIZES.find(([k]) => k === n) || [n, n * 2])[1];
+        const ids = quizBase().map((q) => q.id).sort(() => Math.random() - 0.5).slice(0, n);
+        if (!ids.length) return;
+        S.exam = { ids, ans: {}, i: 0, start: Date.now(), lim: lim * ids.length / n, done: false };
         break;
       }
-      case "casemark": {
-        const parts = v.split(":");
-        S.caseMark[parts[0]] = +parts[1];
-        break;
+      case "exampick": S.exam.ans[S.exam.ids[S.exam.i]] = +v; if (S.exam.i < S.exam.ids.length - 1) S.exam.i++; break;
+      case "examgo": S.exam.i = Math.max(0, Math.min(S.exam.ids.length - 1, +v)); break;
+      case "examsubmit": {
+        const left = S.exam.ids.length - Object.keys(S.exam.ans).length;
+        if (left && !confirm(`还有 ${left} 题没答，确定交卷？`)) return;
+        examSubmit(); break;
       }
-      default: return;
+      case "examquit": if (!confirm("放弃本场模考？不计成绩。")) return; S.exam = null; break;
+      case "examnew": S.exam = null; break;
+      default: {
+        const fn = ACTS[el.dataset.act];
+        if (!fn || fn(v, el) === false) return;
+      }
     }
     render();
   });
 
+  function setPath(path, value) {
+    const keys = path.split(".");
+    let o = S;
+    for (let i = 0; i < keys.length - 1; i++) o = o[keys[i]] || (o[keys[i]] = {});
+    o[keys[keys.length - 1]] = value;
+  }
   const onInput = (e) => {
     const el = e.target; const key = el.dataset && el.dataset.bind;
     if (!key) return;
-    S[key] = el.value;
+    setPath(key, el.value);
     const region = el.dataset.region;
-    if (region && REGIONS[region]) { $("region-" + region).innerHTML = REGIONS[region](); save(); }
+    if (region && REGIONS[region]) { const box = $("region-" + region); if (box) box.innerHTML = REGIONS[region](); save(); }
+    else if (el.dataset.quiet != null) save();
     else render();
   };
-  document.addEventListener("input", (e) => {
-    const el = e.target;
-    if (el.dataset && el.dataset.draft != null) {
-      S.caseDraft[el.dataset.draft] = el.value;
-      save();
-      return;
-    }
-    if (el.tagName === "INPUT") onInput(e);
-  });
+  document.addEventListener("input", (e) => { if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") onInput(e); });
   document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") onInput(e); });
   $("themeBtn").addEventListener("click", () => { S.dark = !S.dark; render(); });
 
