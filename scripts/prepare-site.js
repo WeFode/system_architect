@@ -8,7 +8,7 @@ fs.writeFileSync(path.join(panel, "outline.js"), "window.OUTLINE_MD = " + JSON.s
 const dist = path.join(root, "dist");
 fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist);
-for (const name of ["index.html", "style.css", "data.js", "md.js", "app.js", "outline.js"]) {
+for (const name of ["index.html", "style.css", "data.js", "md.js", "case.js", "app.js", "outline.js"]) {
   fs.copyFileSync(path.join(panel, name), path.join(dist, name));
 }
 console.log("outline.js + dist/ ready");

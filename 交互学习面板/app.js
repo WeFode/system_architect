@@ -7,7 +7,8 @@
     r1: "0.9", r2: "0.9", r3: "0.9", topo: "mix", mttf: "2000", mttr: "2",
     memS: "A0000", memE: "DFFFF", chipK: "32", chipB: "8", unitB: "8",
     stages: "2,1,3", pn: "100", dn: "5", dm: "3", hn: "32",
-    search: "", plan: {}, dark: false
+    search: "", plan: {}, dark: false,
+    caseMode: "read", caseCat: "all", caseQ: "", caseOpen: {}, caseDraft: {}, caseMark: {}, caseAll: false
   };
   let S = Object.assign({}, DEF, JSON.parse(localStorage.getItem(KEY) || "{}"));
   let flipped = false, picked = null, openRow = null;
@@ -16,7 +17,7 @@
   const $ = (id) => document.getElementById(id);
   const modName = (id) => (MODS.find((m) => m.id === id) || { name: "全部" }).name;
 
-  const TABS = [["outline", "总提纲"], ["map", "考试地图"], ["cards", "口诀背卡"], ["lab", "场景实验室"], ["quiz", "闯关测验"], ["search", "触发词速查"], ["tpl", "案例·论文·计划"]];
+  const TABS = [["outline", "总提纲"], ["map", "考试地图"], ["cards", "口诀背卡"], ["lab", "场景实验室"], ["quiz", "闯关测验"], ["search", "触发词速查"], ["case", "案例对比"], ["tpl", "案例·论文·计划"]];
 
   // ---------------- 场景数据 ----------------
   const SCN = [
@@ -127,7 +128,7 @@
         <table>
           <tr><th>科目</th><th>形式</th><th>策略</th></tr>
           <tr><td>综合知识</td><td>75 道单选</td><td>架构 + 基础 + 软工约占 2/3，先稳这三块</td></tr>
-          <tr><td>案例分析</td><td>第 1 题必答，后 4 选 2</td><td>第 1 题几乎固定考质量属性与评估，必须拿满</td></tr>
+          <tr><td>案例分析</td><td>第 1 题必答，后 4 选 2</td><td>第 1 题拿质量属性；对比选型去「案例对比」背表默写</td></tr>
           <tr><td>论文</td><td>4 选 1，120 分钟</td><td>一个真实项目 + 质量属性策略素材库打天下</td></tr>
         </table>
         <p class="faint">机考，上午综合知识 + 案例，下午论文；具体时长以当年报名公告为准</p>
@@ -438,12 +439,79 @@
       ${k ? `<h3>相关背卡（${cards.length}）</h3>${cards.map((c) => `<div class="panel" style="margin:8px 0"><b>${esc(c.q)}</b> <span class="faint">· ${esc(modName(c.m))}</span><div style="margin-top:6px">${cardBody(c)}</div></div>`).join("")}` : ""}`;
   }
 
+  // ---------------- 案例对比（背题 / 默写） ----------------
+  function caseShown(item, ri, ci) {
+    if (S.caseMode !== "write" || ci === 0 || S.caseAll) return true;
+    return !!S.caseOpen[item.id + "-" + ri + "-" + ci];
+  }
+  function caseKeys(item) {
+    const keys = [];
+    item.rows.forEach((row, ri) => row.forEach((_, ci) => { if (ci) keys.push(item.id + "-" + ri + "-" + ci); }));
+    return keys;
+  }
+  function materializeCase() {
+    if (!S.caseAll) return;
+    S.caseAll = false;
+    CASE_COMPARE.forEach((item) => caseKeys(item).forEach((k) => { S.caseOpen[k] = 1; }));
+  }
+  function caseList() {
+    const k = S.caseQ.trim().toLowerCase();
+    const items = CASE_COMPARE.filter((item) => {
+      if (S.caseCat !== "all" && item.category !== S.caseCat) return false;
+      if (!k) return true;
+      return [item.title, item.tip, item.category, ...item.headers, ...item.rows.flat()].join(" ").toLowerCase().includes(k);
+    });
+    if (!items.length) return `<div class="panel"><p>没有对上的对比题。换个分类，或把搜索词缩短。</p></div>`;
+    return items.map((item) => {
+      const head = item.headers.map((h) => `<th>${esc(h)}</th>`).join("");
+      const body = item.rows.map((row, ri) => `<tr>${row.map((cell, ci) => {
+        const shown = caseShown(item, ri, ci);
+        const act = S.caseMode === "write" && ci > 0 ? ` data-act="casecell" data-v="${item.id}-${ri}-${ci}"` : "";
+        const inner = shown ? esc(cell) : `<span class="mask">点击显示</span>`;
+        return `<td${act}>${ci === 0 ? `<b>${inner}</b>` : inner}</td>`;
+      }).join("")}</tr>`).join("");
+      const mark = S.caseMark[item.id];
+      const marks = [["0", "不会"], ["1", "模糊"], ["2", "会了"]].map(([v, n]) =>
+        `<button class="pill ${String(mark) === v ? "on" : ""}" data-act="casemark" data-v="${item.id}:${v}">${n}</button>`).join("");
+      const write = S.caseMode === "write";
+      return `<div class="panel" style="margin-bottom:14px">
+        <div class="row" style="justify-content:space-between"><b>${item.id}. ${esc(item.title)}</b><span class="tag">${esc(item.category)}</span></div>
+        <div class="case-scroll"><table><tr>${head}</tr>${body}</table></div>
+        <p class="sec pre" style="margin-top:10px"><span class="tag">踩分</span>${esc(item.tip)}</p>
+        ${write ? `<textarea class="note" data-draft="${item.id}" placeholder="先写结论一句，再按维度列差异，最后扣题干原词。">${esc(S.caseDraft[item.id] || "")}</textarea>
+          <div class="row" style="margin-top:8px"><button data-act="casecard" data-v="${item.id}">显隐本题答案</button>${marks}</div>` : `<div class="row" style="margin-top:8px">${marks}</div>`}
+      </div>`;
+    }).join("");
+  }
+  function renderCase() {
+    const cats = ["all"].concat([...new Set(CASE_COMPARE.map((c) => c.category))]);
+    const known = CASE_COMPARE.filter((c) => S.caseMark[c.id] === 2).length;
+    const names = { all: "全部" };
+    return `
+      <p class="muted">案例分析里的对比选型题：背题直接看表，默写先遮住方案列，自己写完再点开核对。勾过的掌握程度保存在本机。</p>
+      <div class="grid g3" style="margin:12px 0">
+        ${CASE_RULES.map(([t, d]) => `<div class="panel"><b>${esc(t)}</b><p class="faint" style="margin-top:6px">${esc(d)}</p></div>`).join("")}
+      </div>
+      <p class="faint">${esc(CASE_FRAME)} 已掌握 ${known} / ${CASE_COMPARE.length} 题。</p>
+      <div class="row" style="margin:12px 0">
+        ${cats.map((c) => `<button class="pill ${S.caseCat === c ? "on" : ""}" data-act="casecat" data-v="${esc(c)}">${esc(names[c] || c)}</button>`).join("")}
+      </div>
+      <div class="row" style="margin-bottom:14px">
+        <button class="pill ${S.caseMode === "read" ? "on" : ""}" data-act="casemode" data-v="read">背题</button>
+        <button class="pill ${S.caseMode === "write" ? "on" : ""}" data-act="casemode" data-v="write">默写</button>
+        <input class="wide" data-bind="caseQ" data-region="case" placeholder="搜索对比题，如 gRPC、权衡点" value="${esc(S.caseQ)}">
+        ${S.caseMode === "write" ? `<button data-act="caseall">${S.caseAll ? "隐藏全部答案" : "显示全部答案"}</button>` : ""}
+      </div>
+      <div id="region-case">${caseList()}</div>`;
+  }
+
   // ---------------- 模板与计划 ----------------
   function renderTpl() {
     const segs = [["选题", 5], ["列提纲", 10], ["摘要", 15], ["正文", 80], ["检查", 10]];
     const colors = ["var(--faint)", "var(--mid)", "var(--accent)", "var(--ok)", "var(--bad)"];
     return `
-    <h2 style="margin-top:0">案例分析第 1 题（必答）答题模板</h2>
+    <p class="muted">对比选型（单体和微服务、REST 和 gRPC、CP 和 AP、缓存策略）在「案例对比」里背表和默写。质量属性第 1 题用下面的骨架。</p>
+    <h2>案例分析第 1 题（必答）答题模板</h2>
     <table>
       <tr><th>题型</th><th>答题骨架</th></tr>
       <tr><td>质量属性归类</td><td>“属于 <b>XX</b> 质量属性，原因是该描述关注 <b>……（引用题干原词）</b>。”先按判定树：时间/并发 → 性能；故障/恢复 → 可用性；攻击/授权 → 安全性；改动/人天 → 可修改性。</td></tr>
@@ -495,12 +563,12 @@
   // ---------------- 渲染与事件 ----------------
   function render() {
     document.body.classList.toggle("dark", !!S.dark);
-    document.body.classList.toggle("wide", S.tab === "outline");
+    document.body.classList.toggle("wide", S.tab === "outline" || S.tab === "case");
     $("tabs").innerHTML = TABS.map(([v, n]) => `<button class="pill ${S.tab === v ? "on" : ""}" data-act="tab" data-v="${v}">${n}</button>`).join("");
-    $("app").innerHTML = { outline: renderOutline, map: renderMap, cards: renderCards, lab: renderLab, quiz: renderQuiz, search: renderSearch, tpl: renderTpl }[S.tab]();
+    $("app").innerHTML = { outline: renderOutline, map: renderMap, cards: renderCards, lab: renderLab, quiz: renderQuiz, search: renderSearch, case: renderCase, tpl: renderTpl }[S.tab]();
     save();
   }
-  const REGIONS = { rel: relOut, avail: availOut, mem: memOut, pipe: pipeOut, dead: deadOut, ham: hamOut, search: searchOut };
+  const REGIONS = { rel: relOut, avail: availOut, mem: memOut, pipe: pipeOut, dead: deadOut, ham: hamOut, search: searchOut, case: caseList };
 
   document.addEventListener("click", (e) => {
     const el = e.target.closest("[data-act]");
@@ -541,6 +609,32 @@
       case "unwrong": S.wrong = S.wrong.filter((x) => x !== S.qid); nextQ(); break;
       case "resetq": if (confirm("清零测验统计？错题本会保留。")) S.quiz = { done: 0, right: 0 }; break;
       case "plan": S.plan[v] = el.checked; break;
+      case "casemode": S.caseMode = v; break;
+      case "casecat": S.caseCat = v; break;
+      case "caseall":
+        if (S.caseAll) { S.caseAll = false; S.caseOpen = {}; }
+        else S.caseAll = true;
+        break;
+      case "casecell":
+        if (S.caseMode !== "write") return;
+        materializeCase();
+        if (S.caseOpen[v]) delete S.caseOpen[v];
+        else S.caseOpen[v] = 1;
+        break;
+      case "casecard": {
+        const item = CASE_COMPARE.find((x) => String(x.id) === v);
+        if (!item) return;
+        materializeCase();
+        const keys = caseKeys(item);
+        const allOn = keys.every((k) => S.caseOpen[k]);
+        keys.forEach((k) => { if (allOn) delete S.caseOpen[k]; else S.caseOpen[k] = 1; });
+        break;
+      }
+      case "casemark": {
+        const parts = v.split(":");
+        S.caseMark[parts[0]] = +parts[1];
+        break;
+      }
       default: return;
     }
     render();
@@ -554,7 +648,15 @@
     if (region && REGIONS[region]) { $("region-" + region).innerHTML = REGIONS[region](); save(); }
     else render();
   };
-  document.addEventListener("input", (e) => { if (e.target.tagName === "INPUT") onInput(e); });
+  document.addEventListener("input", (e) => {
+    const el = e.target;
+    if (el.dataset && el.dataset.draft != null) {
+      S.caseDraft[el.dataset.draft] = el.value;
+      save();
+      return;
+    }
+    if (el.tagName === "INPUT") onInput(e);
+  });
   document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") onInput(e); });
   $("themeBtn").addEventListener("click", () => { S.dark = !S.dark; render(); });
 
