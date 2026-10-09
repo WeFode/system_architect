@@ -2,7 +2,7 @@
 // 数据来自 essay-data.js（由《论文终版模板.md》《论文套题库.md》解析）和 essay-matrix.js（真题映射、关键词、排期）。
 (window.KD_PLUG = window.KD_PLUG || []).push(function (api) {
   const esc = (s) => api.esc(s);
-  const SUBS = [["radar", "题材雷达"], ["template", "终版模板"], ["recall", "套题背诵"], ["assemble", "组装与默写"], ["profile", "事实表"], ["write", "限时写作"], ["rules", "结构与雷区"]];
+  const SUBS = [["radar", "题材雷达"], ["template", "终版模板"], ["recall", "套题背诵"], ["drill", "默写训练"], ["assemble", "组装与默写"], ["profile", "事实表"], ["write", "限时写作"], ["rules", "结构与雷区"]];
   const SLOT_INFO = {
     A: ["扣题句", "第一段末尾，接在“业务并发高峰又集中在申报端，”之后"],
     S: ["摘要句", "摘要里，“8 倍左右。”之后"],
@@ -183,7 +183,7 @@
         <div class="row"><input class="wide" data-bind="essayQ" data-region="essayPick" placeholder="把考卷上的题目抄在这里，例如：论分布式事务及其应用" value="${esc(S.essayQ || "")}"></div>
         <div id="region-essayPick" style="margin-top:8px">${pickOut()}</div></div>
       <div class="tiles">
-        <div><div class="label">已背套题槽位</div><div class="big">${learnedSlots()} / ${totalSlots()}</div><p class="faint">今天到期复习的槽位 ${kits().reduce((a, k) => a + dueCount(k), 0)} 个</p></div>
+        <div><div class="label">已背套题槽位</div><div class="big">${learnedSlots()} / ${totalSlots()}</div><p class="faint">今天到期复习的槽位 ${kits().reduce((a, k) => a + dueCount(k), 0)} 个；逐句默写到期 ${dueClauses()} 句 ${goBtn("essay:drill", "去默写训练", "ghost")}</p></div>
         <div><div class="label">近 10 次真题有专门套题</div><div class="big">${direct.length} / ${all.length}</div><p class="faint">必背的 9 套就覆盖 ${tierS.length} 道</p></div>
         <div><div class="label">按你现在背熟的算</div><div class="big">${done.length} / ${all.length}</div><p class="faint">背熟度 85% 以上才算</p></div>
         <div><div class="label">下一套该背</div><div class="big" style="font-size:18px">${next ? esc(next.id + " " + shortName(next.name, next.id)) : "全部背熟"}</div>${next ? `<p>${goBtn(recallGo(next), "现在去背", "primary")}</p>` : ""}</div>
@@ -293,7 +293,13 @@
       });
       if (li < arr.length - 1) clauses.push(["\n", 1]);
     });
-    return { score: a.length ? lcs(a, b) / a.length : 0, clauses, refLen: a.length, typedLen: b.length };
+    const toks = keyTokens(ref), nb = b.toLowerCase();
+    return { score: a.length ? lcs(a, b) / a.length : 0, clauses, refLen: a.length, typedLen: b.length, ntok: toks.length, miss: toks.filter((t) => !nb.includes(norm(t).toLowerCase())) };
+  }
+  // 阅卷最看重的“硬信息”：数字、英文术语、引号里的关键词
+  function keyTokens(ref) {
+    const m = String(ref).match(/\d+(?:\.\d+)?%?|[A-Za-z][A-Za-z0-9+\-/.]*[A-Za-z0-9]|“[^”]{2,12}”/g) || [];
+    return Array.from(new Set(m.filter((t) => !/^(ms|min)$/i.test(t))));
   }
   function resultHtml(res, label) {
     if (!res) return "";
@@ -302,12 +308,18 @@
     const cls = res.score >= 0.85 ? "ok" : res.score >= 0.6 ? "mid" : "bad";
     const verdict = res.score >= 0.85 ? "基本背牢了" : res.score >= 0.6 ? "骨架在，漏了关键句" : "还没背下来，回去再过一遍";
     return `<div class="panel" style="margin-top:12px"><b>${esc(label)}</b>：和标准稿的字面重合度 <b class="${cls}">${pct(res.score)}</b>，${verdict}。漏写的句子 ${bad} 句，只写了一部分的 ${mid} 句。
+      ${res.ntok ? `<p style="margin:8px 0 0">数字和术语：写对 <b class="${res.miss.length ? "mid" : "ok"}">${res.ntok - res.miss.length} / ${res.ntok}</b>${res.miss.length ? "　漏掉：" + res.miss.slice(0, 40).map((t) => `<span class="slotchip" style="color:var(--bad);border-color:var(--bad);background:transparent">${esc(t)}</span>`).join(" ") : "，数字和术语全对"}</p>` : ""}
       <div class="ess-text" style="margin-top:8px">${res.clauses.map(([c, r]) => (c === "\n" ? "<br>" : `<span class="cl ${r >= 0.8 ? "ok" : r >= 0.4 ? "mid" : "bad"}">${esc(c)}</span>`)).join("")}</div>
       <p class="faint">绿色写到了，黄色只写了一部分，红色基本没写。字面重合度只反映背得牢不牢，阅卷看的是意思对不对、数字对不对。</p></div>`;
   }
   const SEGOPT = [["all", "全文"], ["abstract", "摘要"], ["p1", "第一段"], ["p2", "第二段"], ["p3", "第三段"], ["p4", "第四段"]];
-  const refOf = (k, seg) => {
-    const p = parts(k, false);
+  const stripSlots = (s) => s.replace(/【[A-Z]\d?】/g, "").replace(/([，。；：])\1+/g, "$1");
+  const refOf = (k, seg, base) => {
+    let p = parts(k, false);
+    if (base === "tpl") {
+      const t = DATA().template, f = (arr) => arr.map(stripSlots).filter((x) => norm(x));
+      p = { abstract: f(t.abstract), p1: f(t.p1), p2: f(t.p2), p3: f(k.p3 === "简版" ? t.p3short : t.p3full), p4: f(t.p4) };
+    }
     return seg === "all" ? [].concat(p.abstract, p.p1, p.p2, p.p3, p.p4).join("\n") : (p[seg] || []).join("\n");
   };
 
@@ -334,11 +346,200 @@
       <div class="panel"><b>标题</b> <span class="ess-text">${esc(titleOf(k))}</span></div>
       ${PARTS.map(section).join("")}
       <h3>默写核对</h3>
-      <p class="muted">不看上面，把一段（或全文）默在下面，系统会逐句标出你漏了哪些。建议先默第二、三段，那是得分最集中的地方。</p>
+      <p class="muted">不看上面，把一段（或全文）默在下面，系统会逐句标出你漏了哪些，还会单独列出漏写的数字和术语。可以先只默“母版骨架”（不含槽位，每次考试都一样），再默含槽位的整篇。逐句训练请去“默写训练”。</p>
       <div class="row" style="margin-bottom:6px"><span class="faint">默哪一段</span><select data-bind="dSeg">${SEGOPT.map(([v, n]) => `<option value="${v}" ${v === seg ? "selected" : ""}>${n}</option>`).join("")}</select>
+        <select data-bind="dBase"><option value="kit" ${S.dBase !== "tpl" ? "selected" : ""}>含这一套的槽位</option><option value="tpl" ${S.dBase === "tpl" ? "selected" : ""}>只默母版骨架（不含槽位）</option></select>
         <button class="primary" data-act="dcheck">核对</button><button class="ghost" data-act="dclear">清空</button></div>
       <textarea class="note" data-bind="dText" data-quiet placeholder="在这里默写……">${esc(S.dText || "")}</textarea>
-      ${S.dRes && S.dRes.kit === k.id ? resultHtml(S.dRes.res, (SEGOPT.find(([v]) => v === S.dRes.seg) || [0, "全文"])[1] + "核对") : ""}`;
+      ${S.dRes && S.dRes.kit === k.id ? resultHtml(S.dRes.res, (S.dRes.base === "tpl" ? "母版骨架·" : "") + (SEGOPT.find(([v]) => v === S.dRes.seg) || [0, "全文"])[1] + "核对") : ""}`;
+  }
+
+  // ---------- 默写训练：句子级接龙 + 按熟练度自动减提示 + 弱句间隔重复 ----------
+  // 单位是“一句”。每句有自己的熟练度（0–4 档，同槽位的间隔 GAP），母版句子被所有套题共用，背一次，十五套受益。
+  const hash = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+  const clz = () => api.S.clz || (api.S.clz = {});
+  const SEG_NAME = { abstract: "摘要", p1: "第一段", p2: "第二段", p3: "第三段", p3full: "第三段", p3short: "第三段简版", p4: "第四段" };
+  const segOpts = (scope) => (scope === "kit"
+    ? [["all", "全文"], ["abstract", "摘要"], ["p1", "第一段"], ["p2", "第二段"], ["p3", "第三段"], ["p4", "第四段"]]
+    : [["all", "摘要＋第一至四段"], ["abstract", "摘要"], ["p1", "第一段"], ["p2", "第二段"], ["p3full", "第三段（完整版）"], ["p3short", "第三段（简版）"], ["p4", "第四段"]]);
+  function splitLong(s) {
+    if (norm(s).length <= 90) return [s];
+    let best = -1;
+    for (let i = 0; i < s.length; i++) if (s[i] === "，" && (best < 0 || Math.abs(i - s.length / 2) < Math.abs(best - s.length / 2))) best = i;
+    if (best < 0) return [s];
+    return splitLong(s.slice(0, best + 1)).concat(splitLong(s.slice(best + 1)));
+  }
+  function chainItems(scope, kid, seg) {
+    const t = DATA().template;
+    if (!t) return [];
+    let list;
+    if (scope === "tpl") {
+      const all = [["abstract"], ["p1"], ["p2"], ["p3full"], ["p4"]];
+      list = (seg === "all" ? all : [[seg]]).map(([key]) => [SEG_NAME[key] || key, t[key] || []]);
+    } else {
+      const k = kitOf(kid) || kits()[0], p = parts(k, true);
+      const all = ["abstract", "p1", "p2", "p3", "p4"];
+      list = (seg === "all" ? all : [seg]).map((key) => [SEG_NAME[key], p[key] || []]);
+    }
+    const tag = scope === "kit" ? ((kitOf(kid) || kits()[0]).id + "·") : "";
+    const out = [];
+    list.forEach(([name, paras]) => {
+      let prev = null, open = null, n = 0;
+      paras.forEach((par) => {
+        (par.match(/[^。！？；]+[。！？；]?[”’）)]?/g) || []).forEach((raw) => {
+          let slot = open;
+          const clean = raw.replace(/\u0001([A-Z]\d?)\u0003|\u0002/g, (m, x) => { if (x) { open = x; if (!slot) slot = x; } else open = null; return ""; });
+          splitLong(clean).forEach((piece) => {
+            let ref = piece.trim();
+            const ph = scope === "tpl" && /【[A-Z]\d?】/.test(ref);
+            if (scope === "tpl") ref = stripSlots(ref).trim();
+            if (norm(ref).length < 4) return;
+            n++;
+            out.push({ key: hash(norm(ref)), ref, prev, slot: slot || null,
+              label: `${tag}${name}·第${n}句` + (slot ? `·槽位 ${slot} ${(SLOT_INFO[slot] || [""])[0]}` : "") + (ph ? "（这句里的槽位先留空）" : "") });
+            prev = ref;
+          });
+        });
+      });
+    });
+    return out;
+  }
+  let _pool = null;
+  function poolAll() {
+    if (_pool) return _pool;
+    const seen = new Set(), out = [];
+    const add = (it) => { if (!seen.has(it.key)) { seen.add(it.key); out.push(it); } };
+    chainItems("tpl", null, "all").concat(chainItems("tpl", null, "p3short")).forEach(add);
+    kits().forEach((k) => chainItems("kit", k.id, "all").filter((it) => it.slot).forEach(add));
+    return (_pool = out);
+  }
+  const drToday = () => { const x = api.S.drToday; return x && x[0] === api.today() ? x[1] : 0; };
+  const dueClauses = () => { const st = clz(), td = api.today(); return poolAll().filter((it) => st[it.key] && st[it.key][1] <= td).length; };
+  function makeQueue(scope, kid, seg, skip) {
+    const st = clz(), td = api.today();
+    if (scope === "weak") return poolAll().filter((it) => st[it.key] && st[it.key][1] <= td).sort((a, b) => st[a.key][0] - st[b.key][0] || st[a.key][1] - st[b.key][1]).slice(0, 15);
+    const items = chainItems(scope, kid, seg);
+    if (!skip) return items;
+    const f = items.filter((it) => !(st[it.key] && st[it.key][0] >= 3 && st[it.key][1] > td));
+    return f.length ? f : items;
+  }
+  const slim = (it) => ({ key: it.key, ref: it.ref, prev: it.prev, label: it.label });
+
+  function gradeOne(ref, typed) {
+    const a = norm(ref).toLowerCase(), b = norm(typed).toLowerCase();
+    let cov;
+    if (a.length >= 3) {
+      const bg = new Set();
+      for (let i = 0; i < b.length - 1; i++) bg.add(b.slice(i, i + 2));
+      let hit = 0;
+      for (let i = 0; i < a.length - 1; i++) if (bg.has(a.slice(i, i + 2))) hit++;
+      cov = hit / (a.length - 1);
+    } else cov = b.includes(a) ? 1 : 0;
+    const toks = keyTokens(ref), miss = toks.filter((t) => !b.includes(norm(t).toLowerCase()));
+    const kr = toks.length ? (toks.length - miss.length) / toks.length : 1;
+    return { score: toks.length ? 0.6 * cov + 0.4 * kr : cov, ntok: toks.length, miss, typed };
+  }
+  function diffHtml(ref, typed) {
+    const pos = [], rc = [];
+    for (let i = 0; i < ref.length; i++) if (norm(ref[i])) { pos.push(i); rc.push(ref[i].toLowerCase()); }
+    const tc = Array.from(norm(String(typed).slice(0, 500)).toLowerCase());
+    const n = rc.length, m = tc.length, dp = [];
+    for (let i = 0; i <= n; i++) dp.push(new Uint16Array(m + 1));
+    for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++) dp[i][j] = rc[i - 1] === tc[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    const hit = new Set();
+    for (let i = n, j = m; i > 0 && j > 0;) {
+      if (rc[i - 1] === tc[j - 1]) { hit.add(pos[i - 1]); i--; j--; } else if (dp[i - 1][j] >= dp[i][j - 1]) i--; else j--;
+    }
+    const isPos = new Set(pos);
+    let html = "", run = "", cls = "ok";
+    const flush = () => { if (run) html += `<span class="cl ${cls}">${esc(run)}</span>`; run = ""; };
+    for (let i = 0; i < ref.length; i++) {
+      const c = isPos.has(i) ? (hit.has(i) ? "ok" : "bad") : cls;
+      if (c !== cls) { flush(); cls = c; }
+      run += ref[i];
+    }
+    flush();
+    return html;
+  }
+
+  function drSetup() {
+    const S = api.S, scope = S.drScope || "tpl", skip = S.drSkip !== false;
+    const opts = segOpts(scope), seg = opts.some(([v]) => v === S.drSeg) ? S.drSeg : "all";
+    const kid = (kitOf(S.drKit) || kits()[0]).id;
+    const st = clz(), td = api.today(), pool = poolAll();
+    const tpl = chainItems("tpl", null, "all").concat(chainItems("tpl", null, "p3short"));
+    const stable = tpl.filter((it) => st[it.key] && st[it.key][0] >= 3).length;
+    const seen = pool.filter((it) => st[it.key]).length;
+    const q = makeQueue(scope, kid, seg, skip);
+    const modes = [["tpl", "母版骨架接龙", "不填槽位，把每次考试都一样的固定文字默出来"], ["kit", "套题整篇接龙", "选一套，连同槽位默整篇"], ["weak", "到期弱句强化", "只练该复习和总错的句子，最多 15 句"]];
+    return `
+      <p class="muted">不再整段死背。每次只默<b>一句</b>：先看上一句和提示，凭记忆打出这一句，系统用字面、数字和术语一起判分，再标出你漏的字。<b>越熟给的提示越少</b>，忘了的句子当场回炉，到期自动回来。</p>
+      <div class="tiles">
+        <div><div class="label">今天已默</div><div class="big">${drToday()} 句</div></div>
+        <div><div class="label">到期要复习</div><div class="big ${dueClauses() ? "mid" : ""}">${dueClauses()} 句</div></div>
+        <div><div class="label">母版已稳固</div><div class="big">${stable} / ${tpl.length}</div><p class="faint">连续答对两次以上算稳固，十五套共用</p></div>
+        <div><div class="label">全库练过</div><div class="big">${seen} / ${pool.length}</div></div>
+      </div>
+      <div class="panel"><div class="row" style="margin-bottom:8px">${modes.map(([v, n]) => `<button class="pill ${scope === v ? "on" : ""}" data-act="drscope" data-v="${v}">${n}</button>`).join("")}</div>
+        <p class="faint" style="margin:0 0 8px">${(modes.find(([v]) => v === scope) || modes[0])[2]}</p>
+        <div class="row">
+          ${scope === "kit" ? `<select data-bind="drKit">${kits().map((x) => `<option value="${x.id}" ${x.id === kid ? "selected" : ""}>${esc(x.id)} ${esc(x.name)}</option>`).join("")}</select>` : ""}
+          ${scope !== "weak" ? `<select data-bind="drSeg">${opts.map(([v, n]) => `<option value="${v}" ${v === seg ? "selected" : ""}>${n}</option>`).join("")}</select>
+          <button class="pill ${skip ? "on" : ""}" data-act="drskip">${skip ? "已稳固的句子跳过" : "全部都练"}</button>` : ""}
+          <button class="primary" data-act="drstart" ${q.length ? "" : "disabled"}>开始，共 ${q.length} 句 · 约 ${Math.max(1, Math.round(q.length * 0.7))} 分钟</button></div>
+        ${scope === "weak" && !q.length ? `<p class="faint" style="margin-top:8px">现在没有到期的句子。先去“母版骨架接龙”默一轮，默过的句子才会进入复习。</p>` : ""}</div>
+      <details class="panel" style="margin-top:12px"><summary style="cursor:pointer;font-weight:600">这套训练为什么比重复读更有效</summary>
+        <ul style="padding-left:18px;margin:8px 0">
+          <li><b>先回忆后看答案</b>：费力回忆本身就是记忆最强的一步，重复看稿子只会产生“我很熟”的错觉。</li>
+          <li><b>接龙</b>：用上一句当线索默下一句，练的是句与句之间的顺序，这正是考场上最容易断的地方。</li>
+          <li><b>自动减提示</b>：新句子给“上一句＋首字”，答对一次只给上一句，答对两次以上只给位置，慢慢撤掉拐杖。</li>
+          <li><b>当场回炉</b>：忘了或模糊的句子，这一轮末尾会再问一次，隔了几句再答对，记忆才算数。</li>
+          <li><b>间隔重复</b>：答对的句子隔 1、2、3、5 天再回来，快忘时再复习，省时间。</li>
+          <li><b>数字和术语单独判</b>：阅卷最在意的是数字、术语有没有写对，意思对、字不同不扣你的分。</li>
+          <li><b>键盘</b>：Ctrl+Enter 提交，下一屏按 1 / 2 / 3 记“忘了 / 模糊 / 会了”，按 Enter 采用系统建议。</li></ul></details>`;
+  }
+
+  function drRun(dr) {
+    const S = api.S, it = dr.q[dr.i], st = clz()[it.key], box = st ? st[0] : 0;
+    const lvl = it.retry ? 0 : box >= 3 ? 2 : box === 2 ? 1 : 0;
+    const lvlName = ["带提示：上一句＋首字", "只给上一句", "只给位置，纯默"][lvl];
+    const head = `<div class="row" style="justify-content:space-between;margin-bottom:6px"><span><b>第 ${dr.i + 1} / ${dr.q.length} 句</b>${it.retry ? ` <span class="mid">· 回炉</span>` : ""} <span class="faint">${esc(it.label)}</span></span><span><span class="faint">提示级别：${lvlName}（越熟越少）</span> <button class="ghost" data-act="drquit">结束本轮</button></span></div>
+      <div class="bar" style="height:8px;margin-bottom:12px"><span style="width:${Math.round(dr.i / dr.q.length * 100)}%;background:var(--accent)"></span></div>`;
+    if (dr.phase === "fb") {
+      const r = dr.res, sc = Math.round(r.score * 100), names = ["忘了", "模糊", "会了"];
+      return `${head}
+        <div class="panel"><p class="faint" style="margin:0 0 6px">标准答案（红色是你没写到的字）</p><div class="ess-text">${diffHtml(it.ref, r.typed)}</div>
+          ${r.typed ? `<p class="faint" style="margin:10px 0 4px">你写的</p><div class="ess-text">${esc(r.typed)}</div>` : ""}
+          ${r.ntok ? `<p style="margin:10px 0 0">数字和术语：写对 <b class="${r.miss.length ? "mid" : "ok"}">${r.ntok - r.miss.length} / ${r.ntok}</b>${r.miss.length ? "　漏掉：" + r.miss.map((t) => `<span class="slotchip" style="color:var(--bad);border-color:var(--bad);background:transparent">${esc(t)}</span>`).join(" ") : ""}</p>` : ""}
+          <p style="margin:10px 0 0">综合得分 <b class="${sc >= 85 ? "ok" : sc >= 55 ? "mid" : "bad"}">${sc}%</b>${dr.hint ? "（用了提示，最高按“模糊”）" : ""}。系统建议：<b>${names[dr.sug]}</b></p></div>
+        <div class="row" style="margin-top:12px"><span class="faint">你自己的感觉</span>${[0, 1, 2].map((g) => `<button class="${g === dr.sug ? "primary" : ""}" data-act="drgrade" data-v="${g}">${g + 1} ${names[g]}${g === dr.sug ? "（Enter）" : ""}</button>`).join("")}</div>`;
+    }
+    const prev = it.prev ? `<p class="muted" style="margin:0 0 8px">上一句：${esc(it.prev)}</p>` : `<p class="muted" style="margin:0 0 8px">这是这一段的第一句。</p>`;
+    const showPrev = lvl <= 1 || dr.hint, showHint = lvl === 0 || dr.hint;
+    return `${head}
+      <div class="panel">${showPrev ? prev : `<p class="muted" style="margin:0 0 8px">不给上一句了，只凭位置默出来：<b>${esc(it.label)}</b></p>`}
+        ${showHint ? `<p style="margin:0">首字提示：<span class="ess-text hint">${esc(clauseHint(it.ref))}</span></p>` : ""}</div>
+      <textarea id="dr-input" class="note" rows="3" data-bind="drText" data-quiet placeholder="凭记忆打出这一句（Ctrl+Enter 提交）">${esc(S.drText || "")}</textarea>
+      <div class="row" style="margin-top:8px"><button id="dr-submit" class="primary" data-act="drsubmit">提交（Ctrl+Enter）</button>
+        ${showHint ? "" : `<button data-act="drhint">给我提示</button>`}<button class="ghost" data-act="drgive">不会，直接看答案</button></div>`;
+  }
+
+  function drDone(dr) {
+    const L = dr.log, cnt = [0, 1, 2].map((g) => L.filter((x) => x.g === g).length), weak = L.filter((x) => x.g < 2);
+    const mins = Math.max(1, Math.round((Date.now() - dr.t0) / 60000));
+    return `
+      <div class="panel"><h3 style="margin-top:0">本轮结束</h3>
+        <p>共默 <b>${L.length}</b> 句，用时约 ${mins} 分钟：<b class="ok">会了 ${cnt[2]}</b>　<b class="mid">模糊 ${cnt[1]}</b>　<b class="bad">忘了 ${cnt[0]}</b>。</p>
+        <div class="row">${weak.length ? `<button class="primary" data-act="drredo">把这 ${weak.length} 句再来一轮</button>` : ""}<button data-act="drexit">回到训练首页</button></div></div>
+      ${weak.length ? `<h3>需要再看一眼的句子</h3><div class="panel">${weak.map((x) => `<p style="margin:0 0 10px"><span class="faint">${esc(x.label)}</span><br><span class="ess-text">${esc(x.ref)}</span></p>`).join("")}</div>` : `<p class="ok">这一轮全部答对。明天到期的句子会自动回来。</p>`}`;
+  }
+
+  function renderDrill() {
+    const d = DATA();
+    if (!d.template) return missing();
+    const dr = api.S.dr;
+    if (dr && dr.phase === "done") return drDone(dr);
+    return dr ? drRun(dr) : drSetup();
   }
 
   // ---------- 事实表 ----------
@@ -426,7 +627,7 @@
 
   function renderEssay() {
     const S = api.S;
-    const map = { radar: renderRadar, template: renderTemplate, recall: renderRecall, assemble: renderAssemble, profile: renderProfile, write: renderWrite, rules: renderRules };
+    const map = { radar: renderRadar, template: renderTemplate, recall: renderRecall, drill: renderDrill, assemble: renderAssemble, profile: renderProfile, write: renderWrite, rules: renderRules };
     const fn = map[S.essaySub] || renderRadar;
     return `<div class="row" style="margin-bottom:14px">${SUBS.map(([v, n]) => `<button class="pill ${(map[S.essaySub] ? S.essaySub : "radar") === v ? "on" : ""}" data-act="essaysub" data-v="${v}">${n}</button>`).join("")}</div>${fn()}`;
   }
@@ -443,9 +644,26 @@
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => {});
   }
 
+  // 键盘：Ctrl+Enter 提交；点评阶段按 1/2/3 记分，Enter 采用系统建议
+  document.addEventListener("keydown", (e) => {
+    const S = api.S;
+    if (S.tab !== "essay" || S.essaySub !== "drill" || !S.dr) return;
+    const tag = e.target && e.target.tagName;
+    if (S.dr.phase === "ask" && e.target && e.target.id === "dr-input" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault(); const b = document.getElementById("dr-submit"); if (b) b.click(); return;
+    }
+    if (S.dr.phase === "fb" && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && tag !== "BUTTON") {
+      const g = e.key === "Enter" ? S.dr.sug : ["1", "2", "3"].indexOf(e.key);
+      if (g >= 0 && g <= 2) { e.preventDefault(); const b = document.querySelector('[data-act="drgrade"][data-v="' + g + '"]'); if (b) b.click(); }
+    }
+  });
+
   return {
-    defaults: { essaySub: "radar", kitId: "K01", writeKit: "K01", essayQ: "", essayMode: "full", essayShow: {}, tplView: "slots", kitMark: {}, dSeg: "all", dText: "", dRes: null, wRes: null, writeRef: false, factHide: false, factOpen: {}, essayText: "", essayStart: 0 },
-    tabs: { essay: { name: "论文工坊", render: renderEssay } },
+    defaults: { drScope: "tpl", drSeg: "all", drKit: "K01", drSkip: true, drText: "", dr: null, clz: {}, drToday: [0, 0], dBase: "kit", essaySub: "radar", kitId: "K01", writeKit: "K01", essayQ: "", essayMode: "full", essayShow: {}, tplView: "slots", kitMark: {}, dSeg: "all", dText: "", dRes: null, wRes: null, writeRef: false, factHide: false, factOpen: {}, essayText: "", essayStart: 0 },
+    tabs: { essay: { name: "论文工坊", render: renderEssay, after: () => {
+      const el = document.getElementById("dr-input");
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    } } },
     subs: { essay: "essaySub" },
     regions: { essayStat: writeStat, essayPick: pickOut },
     acts: {
@@ -468,12 +686,48 @@
       dcheck: () => {
         const k = curKit(), S = api.S, seg = S.dSeg || "all";
         if (!(S.dText || "").trim()) { alert("先在文本框里默写一些内容。"); return false; }
-        S.dRes = { kit: k.id, seg, res: check(refOf(k, seg), S.dText) };
+        S.dRes = { kit: k.id, seg, base: S.dBase === "tpl" ? "tpl" : "kit", res: check(refOf(k, seg, S.dBase), S.dText) };
       },
       dclear: () => { api.S.dText = ""; api.S.dRes = null; },
       factopen: (v) => { (api.S.factOpen || (api.S.factOpen = {}))[v] = true; },
       facthide: () => { api.S.factHide = !api.S.factHide; api.S.factOpen = {}; },
       factreset: () => { api.S.factOpen = {}; },
+      drscope: (v) => { api.S.drScope = v; },
+      drskip: () => { api.S.drSkip = api.S.drSkip === false; },
+      drstart: () => {
+        const S = api.S, scope = S.drScope || "tpl", opts = segOpts(scope), seg = opts.some(([v]) => v === S.drSeg) ? S.drSeg : "all";
+        const q = makeQueue(scope, (kitOf(S.drKit) || kits()[0]).id, seg, S.drSkip !== false);
+        if (!q.length) { alert("没有可练的句子。"); return false; }
+        S.drText = "";
+        S.dr = { scope, q: q.map(slim), i: 0, phase: "ask", hint: false, res: null, sug: 0, log: [], t0: Date.now() };
+      },
+      drhint: () => { api.S.dr.hint = true; },
+      drsubmit: () => {
+        const S = api.S, dr = S.dr, it = dr.q[dr.i], typed = (S.drText || "").trim();
+        if (!typed) { alert("先打一点再提交；真的不会就点“不会，直接看答案”。"); return false; }
+        dr.res = gradeOne(it.ref, typed);
+        dr.sug = Math.min(dr.res.score >= 0.85 ? 2 : dr.res.score >= 0.55 ? 1 : 0, dr.hint ? 1 : 2);
+        dr.phase = "fb";
+      },
+      drgive: () => { const dr = api.S.dr, it = dr.q[dr.i]; dr.res = gradeOne(it.ref, ""); dr.sug = 0; dr.phase = "fb"; },
+      drgrade: (v) => {
+        const S = api.S, dr = S.dr, it = dr.q[dr.i], g = +v;
+        if (!it.retry) {
+          const prev = clz()[it.key], box = prev ? prev[0] : 0;
+          const nb = g === 0 ? 0 : g === 1 ? 1 : Math.min(4, Math.max(2, box + 1));
+          clz()[it.key] = [nb, api.today() + GAP[nb], (prev ? prev[2] || 0 : 0) + (g === 0 ? 1 : 0)];
+          dr.log.push({ key: it.key, ref: it.ref, prev: it.prev, label: it.label, g });
+          S.drToday = [api.today(), drToday() + 1];
+          if (g < 2) dr.q.push(Object.assign({}, it, { retry: true }));
+        }
+        dr.i++; dr.hint = false; dr.res = null; dr.phase = dr.i >= dr.q.length ? "done" : "ask"; S.drText = "";
+      },
+      drquit: () => { const S = api.S; if (S.dr.log.length) S.dr.phase = "done"; else S.dr = null; S.drText = ""; },
+      drredo: () => {
+        const S = api.S, q = S.dr.log.filter((x) => x.g < 2).map(slim);
+        S.drText = ""; S.dr = { scope: S.dr.scope, q, i: 0, phase: "ask", hint: false, res: null, sug: 0, log: [], t0: Date.now() };
+      },
+      drexit: () => { api.S.dr = null; api.S.drText = ""; },
       essaystart: () => { api.S.essayStart = Date.now(); },
       essaystop: () => { api.S.essayStart = 0; },
       writeref: () => { api.S.writeRef = !api.S.writeRef; },
