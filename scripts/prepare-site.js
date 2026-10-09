@@ -14,7 +14,7 @@ fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist);
 const FILES = [
   "index.html", "style.css", "data.js", "md.js", "case.js", "case-real.js", "drill.js", "plan.js", "book.js", "bank.js",
-  "essay-data.js", "essay-matrix.js", "graph-data.js",
+  "essay-data.js", "essay-matrix.js", "essay-vocab.js", "graph-data.js",
   "ui-sprint.js", "ui-drill.js", "ui-case.js", "ui-essay.js", "ui-anim.js", "sim-a.js", "sim-b.js", "ui-graph.js",
   "app.js", "outline.js"
 ];

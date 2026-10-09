@@ -46,6 +46,20 @@
       .cl.ok { color: var(--ok); } .cl.mid { color: var(--mid); background: color-mix(in srgb, var(--mid) 12%, transparent); } .cl.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); text-decoration: underline wavy; }
       tr.today td { background: var(--accent-soft); }
       .factrow td:nth-child(2) { cursor: default; }
+      .dr-nav { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 0 0 10px; }
+      .navg { font-size: 12px; margin: 0 2px 0 10px; }
+      .navg:first-child { margin-left: 0; }
+      button.navb { min-width: 28px; height: 26px; padding: 0 5px; font-size: 12px; border-radius: 6px; background: var(--fill); border: 1px solid transparent; }
+      button.navb.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+      button.navb.bad { border-color: var(--bad); } button.navb.mid { border-color: var(--mid); } button.navb.ok { border-color: var(--ok); }
+      button.navb.ok2 { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 28%, var(--fill)); }
+      .dr-wrap { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+      .dr-main { flex: 1 1 420px; min-width: 0; }
+      .dr-aid { flex: 0 1 310px; min-width: 260px; position: sticky; top: 10px; }
+      mark.kw { background: var(--accent-soft); color: inherit; border-bottom: 2px solid var(--accent); border-radius: 3px; padding: 0 1px; }
+      mark.kw.n { background: color-mix(in srgb, var(--mid) 18%, transparent); border-bottom-color: var(--mid); font-weight: 600; }
+      .kwchip { display: inline-block; margin: 2px 2px; padding: 1px 8px; border-radius: 6px; font-size: 13px; background: var(--accent-soft); border: 1px solid var(--accent); }
+      .kwchip.n { background: color-mix(in srgb, var(--mid) 16%, transparent); border-color: var(--mid); }
       .factmask { color: var(--faint); background: var(--fill); border-radius: 4px; padding: 0 8px; cursor: pointer; }
     `;
     document.head.appendChild(st);
@@ -462,6 +476,84 @@
     return html;
   }
 
+  // ---------- 辅助记忆：骨架词（术语库匹配）+ 句型识别 + 首字串 + 数字锚（对到事实表）。全部本地计算，不联网。 ----------
+  let _vocab = null;
+  function vocab() {
+    if (_vocab) return _vocab;
+    const set = new Set(window.ESSAY_VOCAB || []);
+    Object.values(MX().keys || {}).forEach((a) => a.forEach((w) => set.add(w)));
+    return (_vocab = Array.from(set).filter((w) => w.length >= 2).sort((a, b) => b.length - a.length));
+  }
+  function keywords(ref) {
+    const used = new Array(ref.length).fill(false), hits = [];
+    const take = (i, w, num) => {
+      for (let j = i; j < i + w.length; j++) if (used[j]) return;
+      for (let j = i; j < i + w.length; j++) used[j] = true;
+      hits.push({ p: i, t: w, num });
+    };
+    vocab().forEach((w) => { let from = 0, i; while ((i = ref.indexOf(w, from)) >= 0) { from = i + w.length; take(i, w, false); } });
+    const re = /\d+(?:\.\d+)?%?|[A-Za-z][A-Za-z0-9+\-/.]*[A-Za-z0-9]/g;
+    let m;
+    while ((m = re.exec(ref))) if (!/^(ms|min)$/i.test(m[0])) take(m.index, m[0], /^\d/.test(m[0]));
+    return hits.sort((a, b) => a.p - b.p);
+  }
+  function markHtml(ref) {
+    let html = "", at = 0;
+    keywords(ref).forEach((k) => { html += esc(ref.slice(at, k.p)) + `<mark class="kw ${k.num ? "n" : ""}">${esc(k.t)}</mark>`; at = k.p + k.t.length; });
+    return html + esc(ref.slice(at));
+  }
+  function sentType(ref) {
+    const t = [];
+    if (/一是.+二是/.test(ref)) t.push(["列举", "一是、二是、三是……先记有几条，再逐条展开"]);
+    if (/^[（(][一二三四五六七八九十]+[）)]/.test(ref)) t.push(["分点", "服务名 → 职责 → 关键决策 → 保障效果"]);
+    if (/然而|但是|却|不过/.test(ref)) t.push(["转折", "先肯定前面，再引出问题"]);
+    if (/因为|由于|导致|引发|因此|从而|使得|致使/.test(ref)) t.push(["因果", "原因 → 结果，别写颠倒"]);
+    if (/通过|采用|引入|借助|利用|改为|实施/.test(ref)) t.push(["手段", "用什么手段 → 解决什么问题"]);
+    if (/是指|是一种|指的是|即是/.test(ref)) t.push(["定义", "先给定义，再补特点"]);
+    if (/不足|后续|计划/.test(ref)) t.push(["收束", "不足 → 改进计划，有进有退"]);
+    if (/\d/.test(ref)) t.push(["数字", "数字是硬信息，必须与事实表一致"]);
+    return t.slice(0, 3);
+  }
+  function firstChars(ref) {
+    return (ref.match(/[^，。；：！？]+/g) || []).map((c) => {
+      c = c.trim().replace(/^[（(][一二三四五六七八九十0-9]+[）)]/, "");
+      const m = /^(\d+|[A-Za-z]+)/.exec(c);
+      return m ? m[1] : (c[0] || "");
+    }).filter(Boolean);
+  }
+  function factHits(ref) {
+    const toks = [];
+    (ref.match(/\d+(?:\.\d+)?\s*(?:%|倍|个|人|项|万|分钟|秒|ms|QPS|天|次|级|层|年|月)?/g) || []).forEach((x) => { const s = x.replace(/\s/g, ""); if (s.length >= 2 || /\D$/.test(s)) toks.push(s); });
+    if (!toks.length) return [];
+    return (DATA().facts || []).filter(([, val]) => { const v = String(val).replace(/\s/g, ""); return toks.some((t) => v.includes(t)); }).slice(0, 4);
+  }
+  function aidHtml(it) {
+    const kws = keywords(it.ref), ts = sentType(it.ref), fc = firstChars(it.ref), fh = factHits(it.ref);
+    return `<div class="panel" style="margin:0"><b>辅助记忆</b> <span class="faint">术语库匹配 + 句型识别，本地计算</span>
+      <p class="faint" style="margin:10px 0 4px">骨架词（按出现顺序，先把它们串成一句话讲出来）</p>
+      <div>${kws.length ? kws.map((k) => `<span class="kwchip ${k.num ? "n" : ""}">${esc(k.t)}</span>`).join('<span class="faint">→</span>') : `<span class="faint">这一句术语少，靠下面的句型和首字串来记。</span>`}</div>
+      ${ts.length ? `<p class="faint" style="margin:10px 0 4px">句型</p>${ts.map(([n, h]) => `<div style="margin:2px 0"><b>${n}</b> <span class="muted">${esc(h)}</span></div>`).join("")}` : ""}
+      <p class="faint" style="margin:10px 0 4px">首字串（${fc.length} 个分句）</p><div class="ess-text" style="font-size:15px;letter-spacing:.12em">${esc(fc.join(" · "))}</div>
+      ${fh.length ? `<p class="faint" style="margin:10px 0 4px">数字对应事实表</p>${fh.map(([n, v]) => `<div style="margin:2px 0"><b>${esc(n)}</b> <span class="muted">${esc(String(v).slice(0, 40))}</span></div>`).join("")}` : ""}
+      <p class="faint" style="margin:10px 0 0">共 ${lenOf(it.ref)} 字。记法：先背骨架词的顺序，再补连接的话。</p></div>`;
+  }
+
+  // 句签：每句一个编号，颜色是熟练度，点一下跳过去
+  function navHtml(items, cur, act) {
+    const st = clz();
+    let html = "", group = null;
+    items.forEach((it, i) => {
+      if (it.retry) return;
+      const g = it.label.split("·第")[0], n = (/·第(\d+)句/.exec(it.label) || [0, i + 1])[1];
+      if (g !== group) { html += `<span class="faint navg">${esc(g)}</span>`; group = g; }
+      const r = st[it.key], box = r ? r[0] : -1;
+      const cls = i === cur ? "on" : box < 0 ? "" : box === 0 ? "bad" : box === 1 ? "mid" : box === 2 ? "ok" : "ok2";
+      html += `<button class="navb ${cls}" data-act="${act}" data-v="${i}" title="${esc(it.ref.slice(0, 30))}…">${n}</button>`;
+    });
+    return `<div class="dr-nav">${html}</div>
+      <p class="faint" style="margin:-6px 0 10px;font-size:12px">句签颜色：灰=没练过　红=忘了　黄=模糊　绿框=会了　绿底=稳固　蓝=当前</p>`;
+  }
+
   function drSetup() {
     const S = api.S, scope = S.drScope || "tpl", skip = S.drSkip !== false;
     const opts = segOpts(scope), seg = opts.some(([v]) => v === S.drSeg) ? S.drSeg : "all";
@@ -488,6 +580,7 @@
           <button class="pill ${skip ? "on" : ""}" data-act="drskip">${skip ? "已稳固的句子跳过" : "全部都练"}</button>` : ""}
           <button class="primary" data-act="drstart" ${q.length ? "" : "disabled"}>开始，共 ${q.length} 句 · 约 ${Math.max(1, Math.round(q.length * 0.7))} 分钟</button></div>
         ${scope === "weak" && !q.length ? `<p class="faint" style="margin-top:8px">现在没有到期的句子。先去“母版骨架接龙”默一轮，默过的句子才会进入复习。</p>` : ""}</div>
+      ${scope !== "weak" ? `<h3>句签：点哪一句，就从哪一句开始</h3>${navHtml(chainItems(scope, kid, seg), -1, "drstartat")}` : ""}
       <details class="panel" style="margin-top:12px"><summary style="cursor:pointer;font-weight:600">这套训练为什么比重复读更有效</summary>
         <ul style="padding-left:18px;margin:8px 0">
           <li><b>先回忆后看答案</b>：费力回忆本身就是记忆最强的一步，重复看稿子只会产生“我很熟”的错觉。</li>
@@ -499,24 +592,40 @@
           <li><b>键盘</b>：Ctrl+Enter 提交，下一屏按 1 / 2 / 3 记“忘了 / 模糊 / 会了”，按 Enter 采用系统建议。</li></ul></details>`;
   }
 
+  const lvlOf = (it) => { const st = clz()[it.key], box = st ? st[0] : 0; return it.retry ? 0 : box >= 3 ? 2 : box === 2 ? 1 : 0; };
   function drRun(dr) {
-    const S = api.S, it = dr.q[dr.i], st = clz()[it.key], box = st ? st[0] : 0;
-    const lvl = it.retry ? 0 : box >= 3 ? 2 : box === 2 ? 1 : 0;
+    const S = api.S, it = dr.q[dr.i], lvl = lvlOf(it), study = dr.view === "study" && dr.phase === "ask";
     const lvlName = ["带提示：上一句＋首字", "只给上一句", "只给位置，纯默"][lvl];
-    const head = `<div class="row" style="justify-content:space-between;margin-bottom:6px"><span><b>第 ${dr.i + 1} / ${dr.q.length} 句</b>${it.retry ? ` <span class="mid">· 回炉</span>` : ""} <span class="faint">${esc(it.label)}</span></span><span><span class="faint">提示级别：${lvlName}（越熟越少）</span> <button class="ghost" data-act="drquit">结束本轮</button></span></div>
-      <div class="bar" style="height:8px;margin-bottom:12px"><span style="width:${Math.round(dr.i / dr.q.length * 100)}%;background:var(--accent)"></span></div>`;
+    const n = dr.q.filter((x) => !x.retry).length;
+    const head = `<div class="row" style="justify-content:space-between;margin-bottom:6px"><span><b>第 ${dr.i + 1} / ${dr.q.length} 句</b>${it.retry ? ` <span class="mid">· 回炉</span>` : ""} <span class="faint">${esc(it.label)}</span></span><span><span class="faint">${study ? "记忆模式，不计成绩" : "提示级别：" + lvlName + "（越熟越少）"}</span> <button class="ghost" data-act="drquit">结束本轮</button></span></div>
+      <div class="bar" style="height:8px;margin-bottom:10px"><span style="width:${Math.round(dr.i / dr.q.length * 100)}%;background:var(--accent)"></span></div>`;
+    const tools = `<div class="row" style="margin:0 0 12px">
+      <button class="ghost" data-act="drstep" data-v="-1" ${dr.i <= 0 ? "disabled" : ""}>◀ 上一句</button><button class="ghost" data-act="drstep" data-v="1" ${dr.i >= dr.q.length - 1 ? "disabled" : ""}>下一句 ▶</button>
+      ${dr.phase === "ask" ? `<button class="pill ${study ? "on" : ""}" data-act="drview" data-v="${study ? "recall" : "study"}">${study ? "回到默写" : "先看答案记一记"}</button>` : ""}
+      <span style="flex:1"></span>
+      <button class="pill ${S.drAid ? "on" : ""}" data-act="draid" title="骨架词、句型、首字串、数字对应事实表">辅助记忆 ${S.drAid ? "开" : "关"}</button>
+      ${S.drAid && !study && dr.phase === "ask" ? `<span class="faint">开着辅助，这一句最多记“模糊”</span>` : ""}</div>`;
+    const aid = S.drAid || study ? `<div class="dr-aid">${aidHtml(it)}</div>` : "";
+    return `${head}${navHtml(dr.q.slice(0, n), dr.i, "drjump")}${tools}<div class="dr-wrap"><div class="dr-main">${drMain(dr, it, lvl, study)}</div>${aid}</div>`;
+  }
+  function drMain(dr, it, lvl, study) {
+    const S = api.S;
+    if (study) {
+      return `<div class="panel"><p class="faint" style="margin:0 0 6px">看着答案记。蓝色是骨架词，橙色是数字，先记它们的顺序</p><div class="ess-text" style="font-size:15px">${markHtml(it.ref)}</div></div>
+        <div class="row" style="margin-top:10px"><button class="primary" data-act="drview" data-v="recall">我记住了，开始默写</button></div>`;
+    }
     if (dr.phase === "fb") {
       const r = dr.res, sc = Math.round(r.score * 100), names = ["忘了", "模糊", "会了"];
-      return `${head}
+      return `
         <div class="panel"><p class="faint" style="margin:0 0 6px">标准答案（红色是你没写到的字）</p><div class="ess-text">${diffHtml(it.ref, r.typed)}</div>
           ${r.typed ? `<p class="faint" style="margin:10px 0 4px">你写的</p><div class="ess-text">${esc(r.typed)}</div>` : ""}
           ${r.ntok ? `<p style="margin:10px 0 0">数字和术语：写对 <b class="${r.miss.length ? "mid" : "ok"}">${r.ntok - r.miss.length} / ${r.ntok}</b>${r.miss.length ? "　漏掉：" + r.miss.map((t) => `<span class="slotchip" style="color:var(--bad);border-color:var(--bad);background:transparent">${esc(t)}</span>`).join(" ") : ""}</p>` : ""}
-          <p style="margin:10px 0 0">综合得分 <b class="${sc >= 85 ? "ok" : sc >= 55 ? "mid" : "bad"}">${sc}%</b>${dr.hint ? "（用了提示，最高按“模糊”）" : ""}。系统建议：<b>${names[dr.sug]}</b></p></div>
+          <p style="margin:10px 0 0">综合得分 <b class="${sc >= 85 ? "ok" : sc >= 55 ? "mid" : "bad"}">${sc}%</b>${dr.capped ? "（用了提示或辅助，最高按“模糊”）" : ""}。系统建议：<b>${names[dr.sug]}</b></p></div>
         <div class="row" style="margin-top:12px"><span class="faint">你自己的感觉</span>${[0, 1, 2].map((g) => `<button class="${g === dr.sug ? "primary" : ""}" data-act="drgrade" data-v="${g}">${g + 1} ${names[g]}${g === dr.sug ? "（Enter）" : ""}</button>`).join("")}</div>`;
     }
     const prev = it.prev ? `<p class="muted" style="margin:0 0 8px">上一句：${esc(it.prev)}</p>` : `<p class="muted" style="margin:0 0 8px">这是这一段的第一句。</p>`;
     const showPrev = lvl <= 1 || dr.hint, showHint = lvl === 0 || dr.hint;
-    return `${head}
+    return `
       <div class="panel">${showPrev ? prev : `<p class="muted" style="margin:0 0 8px">不给上一句了，只凭位置默出来：<b>${esc(it.label)}</b></p>`}
         ${showHint ? `<p style="margin:0">首字提示：<span class="ess-text hint">${esc(clauseHint(it.ref))}</span></p>` : ""}</div>
       <textarea id="dr-input" class="note" rows="3" data-bind="drText" data-quiet placeholder="凭记忆打出这一句（Ctrl+Enter 提交）">${esc(S.drText || "")}</textarea>
@@ -644,11 +753,18 @@
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => {});
   }
 
-  // 键盘：Ctrl+Enter 提交；点评阶段按 1/2/3 记分，Enter 采用系统建议
+  function jumpTo(i) {
+    const S = api.S, dr = S.dr;
+    dr.i = Math.max(0, Math.min(dr.q.length - 1, i)); dr.phase = "ask"; dr.hint = false; dr.res = null; dr.view = "recall"; S.drText = "";
+  }
+  // 键盘：Alt+←/→ 换句；Ctrl+Enter 提交；点评阶段按 1/2/3 记分，Enter 采用系统建议
   document.addEventListener("keydown", (e) => {
     const S = api.S;
     if (S.tab !== "essay" || S.essaySub !== "drill" || !S.dr) return;
     const tag = e.target && e.target.tagName;
+    if (S.dr.phase !== "done" && e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault(); const b = document.querySelector('[data-act="drstep"][data-v="' + (e.key === "ArrowLeft" ? -1 : 1) + '"]'); if (b && !b.disabled) b.click(); return;
+    }
     if (S.dr.phase === "ask" && e.target && e.target.id === "dr-input" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault(); const b = document.getElementById("dr-submit"); if (b) b.click(); return;
     }
@@ -659,7 +775,7 @@
   });
 
   return {
-    defaults: { drScope: "tpl", drSeg: "all", drKit: "K01", drSkip: true, drText: "", dr: null, clz: {}, drToday: [0, 0], dBase: "kit", essaySub: "radar", kitId: "K01", writeKit: "K01", essayQ: "", essayMode: "full", essayShow: {}, tplView: "slots", kitMark: {}, dSeg: "all", dText: "", dRes: null, wRes: null, writeRef: false, factHide: false, factOpen: {}, essayText: "", essayStart: 0 },
+    defaults: { drScope: "tpl", drSeg: "all", drKit: "K01", drSkip: true, drAid: false, drText: "", dr: null, clz: {}, drToday: [0, 0], dBase: "kit", essaySub: "radar", kitId: "K01", writeKit: "K01", essayQ: "", essayMode: "full", essayShow: {}, tplView: "slots", kitMark: {}, dSeg: "all", dText: "", dRes: null, wRes: null, writeRef: false, factHide: false, factOpen: {}, essayText: "", essayStart: 0 },
     tabs: { essay: { name: "论文工坊", render: renderEssay, after: () => {
       const el = document.getElementById("dr-input");
       if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
@@ -706,10 +822,22 @@
         const S = api.S, dr = S.dr, it = dr.q[dr.i], typed = (S.drText || "").trim();
         if (!typed) { alert("先打一点再提交；真的不会就点“不会，直接看答案”。"); return false; }
         dr.res = gradeOne(it.ref, typed);
-        dr.sug = Math.min(dr.res.score >= 0.85 ? 2 : dr.res.score >= 0.55 ? 1 : 0, dr.hint ? 1 : 2);
+        dr.capped = !!(dr.hint || S.drAid);
+        dr.sug = Math.min(dr.res.score >= 0.85 ? 2 : dr.res.score >= 0.55 ? 1 : 0, dr.capped ? 1 : 2);
         dr.phase = "fb";
       },
-      drgive: () => { const dr = api.S.dr, it = dr.q[dr.i]; dr.res = gradeOne(it.ref, ""); dr.sug = 0; dr.phase = "fb"; },
+      drgive: () => { const dr = api.S.dr, it = dr.q[dr.i]; dr.res = gradeOne(it.ref, ""); dr.sug = 0; dr.capped = false; dr.phase = "fb"; },
+      drjump: (v) => jumpTo(+v),
+      drstep: (v) => jumpTo(api.S.dr.i + (+v)),
+      drview: (v) => { api.S.dr.view = v; },
+      draid: () => { api.S.drAid = !api.S.drAid; },
+      drstartat: (v) => {
+        const S = api.S, scope = S.drScope || "tpl", opts = segOpts(scope), seg = opts.some(([x]) => x === S.drSeg) ? S.drSeg : "all";
+        const q = chainItems(scope, (kitOf(S.drKit) || kits()[0]).id, seg);
+        if (!q.length) return false;
+        S.drText = "";
+        S.dr = { scope, q: q.map(slim), i: Math.max(0, Math.min(q.length - 1, +v)), phase: "ask", hint: false, view: "recall", res: null, sug: 0, log: [], t0: Date.now() };
+      },
       drgrade: (v) => {
         const S = api.S, dr = S.dr, it = dr.q[dr.i], g = +v;
         if (!it.retry) {
@@ -720,7 +848,7 @@
           S.drToday = [api.today(), drToday() + 1];
           if (g < 2) dr.q.push(Object.assign({}, it, { retry: true }));
         }
-        dr.i++; dr.hint = false; dr.res = null; dr.phase = dr.i >= dr.q.length ? "done" : "ask"; S.drText = "";
+        dr.i++; dr.hint = false; dr.view = "recall"; dr.capped = false; dr.res = null; dr.phase = dr.i >= dr.q.length ? "done" : "ask"; S.drText = "";
       },
       drquit: () => { const S = api.S; if (S.dr.log.length) S.dr.phase = "done"; else S.dr = null; S.drText = ""; },
       drredo: () => {
