@@ -16,12 +16,12 @@ window.renderMarkdown = function (src) {
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
 
-    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    const h = /^(#{1,4})\s+(.*)$/.exec(line);
     if (h) {
       const level = h[1].length;
       const text = h[2].trim();
       const id = slug(text);
-      if (level >= 2) toc.push({ id, level, text: text.replace(/\*\*/g, "") });
+      if (level === 2 || level === 3) toc.push({ id, level, text: text.replace(/\*\*/g, "") });
       html += `<h${level} id="${id}">${inline(text)}</h${level}>`;
       i++; continue;
     }
@@ -61,7 +61,7 @@ window.renderMarkdown = function (src) {
 
     const buf = [line];
     i++;
-    while (i < lines.length && lines[i].trim() && !/^(#{1,3}\s|>|\||---\s*$)/.test(lines[i]) && !/^\s*([-*]|\d+\.)\s+/.test(lines[i])) {
+    while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|>|\||---\s*$)/.test(lines[i]) && !/^\s*([-*]|\d+\.)\s+/.test(lines[i])) {
       buf.push(lines[i]); i++;
     }
     html += `<p>${buf.map(inline).join("<br>")}</p>`;

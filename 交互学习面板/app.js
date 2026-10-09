@@ -29,7 +29,7 @@
   const qHour = (q) => { const m = /第 (\d+) 小时/.exec(q.src || ""); return m ? +m[1] : 0; };
   const qSrcName = (q) => q.src || "口诀题";
 
-  const TAB_ORDER = ["sprint", "radar", "outline", "cards", "drill", "quiz", "case", "essay", "lab", "search", "tactics"];
+  const TAB_ORDER = ["sprint", "radar", "graph", "anim", "outline", "cards", "drill", "quiz", "case", "essay", "lab", "search", "tactics"];
   const TABS = {
     outline: { name: "总提纲", render: renderOutline, wide: true },
     cards: { name: "口诀背卡", render: renderCards },
@@ -50,7 +50,8 @@
     return {
       get S() { return S; }, save: () => save(), render: () => render(), esc: (s) => esc(s), go: (t) => go(t), today: () => today(),
       modName: (id) => modName(id), modPills: (c, a) => modPills(c, a), cardBody: (c) => cardBody(c), markCard: (id, lv) => markCard(id, lv),
-      srsDue: (id) => srsDue(id), statusCounts: () => statusCounts(), allQ: () => ALLQ, qHour: (q) => qHour(q), book: () => BOOK
+      srsDue: (id) => srsDue(id), statusCounts: () => statusCounts(), allQ: () => ALLQ, qHour: (q) => qHour(q), book: () => BOOK,
+      cards: () => CARDS, card: (id) => CARDS.find((c) => c.id === id)
     };
   }
 
@@ -584,6 +585,7 @@
     document.body.classList.toggle("wide", !!tab.wide);
     $("tabs").innerHTML = TAB_ORDER.filter((id) => TABS[id]).map((id) => `<button class="pill ${S.tab === id ? "on" : ""}" data-act="tab" data-v="${id}">${TABS[id].name}</button>`).join("");
     $("app").innerHTML = tab.render();
+    if (tab.after) tab.after();
     save();
   }
 
@@ -669,6 +671,9 @@
   document.addEventListener("input", (e) => { if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") onInput(e); });
   document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") onInput(e); });
   $("themeBtn").addEventListener("click", () => { S.dark = !S.dark; render(); });
+
+  // 支持 index.html#anim、#essay:recall:kitId=K02 这样的直达链接（与 go() 同格式）
+  if (location.hash.length > 1) { try { go(decodeURIComponent(location.hash.slice(1))); } catch (e) { /* 忽略坏链接 */ } }
 
   render();
 })();

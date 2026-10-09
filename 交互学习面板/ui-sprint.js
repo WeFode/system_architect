@@ -5,6 +5,23 @@
   const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
   const goBtn = (target, label, cls) => `<button class="${cls || ""}" data-act="go" data-v="${esc(target)}">${esc(label)}</button>`;
 
+  // 论文套题背熟数：与论文工坊同一口径（B、C 权重 2，背熟度 85% 以上算背熟）
+  function kitProgress() {
+    const D = window.ESSAY_FINAL, m = api.S.kitMark || {}, sc = [0, 0.34, 0.67, 1, 1];
+    if (!D) return [0, 0];
+    let done = 0;
+    D.kits.forEach((k) => {
+      let s = 0, tot = 0;
+      Object.keys(k.slots).forEach((sl) => {
+        if (!/^(A|S|B|B2|C|E|D)$/.test(sl)) return;
+        const w = sl === "B" || sl === "C" ? 2 : 1, r = m[k.id + "." + sl];
+        tot += w; if (r) s += w * sc[r[0]];
+      });
+      if (tot && s / tot >= 0.85) done++;
+    });
+    return [done, D.kits.length];
+  }
+
   function stats() {
     const S = api.S, sc = api.statusCounts();
     const due = CARDS.filter((c) => S.status[c.id] != null && api.srsDue(c.id)).length;
@@ -14,7 +31,8 @@
     const realOk = Object.values(S.realMark || {}).filter((v) => v === 2).length;
     const realN = CASE_REAL.reduce((a, c) => a + c.qs.length, 0);
     const essayLen = (S.essayText || "").replace(/\s/g, "").length;
-    return { sc, due, jn, jr, seqOk, realOk, realN, essayLen };
+    const [kitDone, kitN] = kitProgress();
+    return { sc, due, jn, jr, seqOk, realOk, realN, essayLen, kitDone, kitN };
   }
   function weakMods() {
     const S = api.S, by = {};
@@ -28,6 +46,7 @@
   function renderSprint() {
     const S = api.S;
     if (!S.sprintStart) S.sprintStart = isoToday();
+    if (!S.examDate) S.examDate = "2026-10-24"; // 2026 年下半年软考高级笔试日，以准考证为准
     const start = dayNum(S.sprintStart), now = api.today();
     const cur = start == null ? 1 : now - start + 1;
     const view = Math.min(7, Math.max(1, +S.sprintView || Math.min(7, Math.max(1, cur))));
@@ -41,7 +60,7 @@
       <div class="grid g3">
         <div class="panel"><div class="label">冲刺进度</div><div class="big">${esc(curLabel)}</div>
           <div class="row" style="margin-top:8px"><span class="faint">开始日</span><input type="date" data-bind="sprintStart" value="${esc(S.sprintStart)}"></div>
-          <div class="row" style="margin-top:6px"><span class="faint">考试日</span><input type="date" data-bind="examDate" value="${esc(S.examDate || "")}">${left != null ? `<b>${left >= 0 ? "还剩 " + left + " 天" : "已过"}</b>` : ""}</div></div>
+          <div class="row" style="margin-top:6px"><span class="faint">考试日</span><input type="date" data-bind="examDate" value="${esc(S.examDate || "")}">${left != null ? `<b>${left >= 0 ? "还剩 " + left + " 天" : "已过"}</b>` : ""}</div><p class="faint">考试日默认 10 月 24 日，以准考证为准，不对请直接改。</p></div>
         <div class="panel"><div class="label">今日待办</div><div class="big">${st.due} 张到期卡</div>
           <p class="faint">背卡会了 ${st.sc[2]} / ${CARDS.length} · 错题本 ${S.wrong.length} 题</p>
           <div class="row">${goBtn("cards:mod=all:filter=due", "去复习", "primary")}${goBtn("quiz:qMode=wrong", "清错题")}</div></div>
@@ -51,7 +70,7 @@
       <div class="grid g3" style="margin-top:14px">
         <div class="panel flat"><div class="label">刷题正确率</div><div class="big">${S.quiz.done ? pct(S.quiz.right, S.quiz.done) + "%" : "—"}</div><p class="faint">已答 ${S.quiz.done} 题 · 题库 ${api.allQ().length} 题</p></div>
         <div class="panel flat"><div class="label">判官 / 顺序默写</div><div class="big">${st.jn ? pct(st.jr, st.jn) + "%" : "—"}</div><p class="faint">判官 ${st.jn} 题 · 顺序零失误 ${st.seqOk} / ${SEQS.length} 组</p></div>
-        <div class="panel flat"><div class="label">案例 / 论文</div><div class="big">${st.realOk} / ${st.realN}</div><p class="faint">真题小问会了 · 论文草稿 ${st.essayLen} 字</p></div>
+        <div class="panel flat"><div class="label">案例 / 论文</div><div class="big">${st.realOk} / ${st.realN}</div><p class="faint">真题小问会了 · 论文套题背熟 ${st.kitDone} / ${st.kitN} 套 · 草稿 ${st.essayLen} 字</p></div>
       </div>
       <h2>7 天作战表</h2>
       <div class="row" style="margin-bottom:12px">${SPRINT.map((x) => { const [n, t] = doneOf(x); return `<button class="pill ${x.day === view ? "on" : ""}" data-act="sprintday" data-v="${x.day}">第 ${x.day} 天${x.day === cur ? "（今天）" : ""} ${n}/${t}</button>`; }).join("")}</div>
