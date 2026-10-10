@@ -25,7 +25,7 @@
   CARDS.push(...BOOK.cards);
   TRIGGERS.push(...BOOK.triggers);
   if (window.SEQS) SEQS.push(...BOOK.seqs);
-  const ALLQ = QUIZ.concat(window.BANK || []);
+  const ALLQ = QUIZ.concat(window.BANK || []).filter((q) => !q.x); // x:1 = 缺图或选项残缺的题，见 scripts/patch-bank.js
   const qHour = (q) => { const m = /第 (\d+) 小时/.exec(q.src || ""); return m ? +m[1] : 0; };
   const qSrcName = (q) => q.src || "口诀题";
 
@@ -51,7 +51,8 @@
       get S() { return S; }, save: () => save(), render: () => render(), esc: (s) => esc(s), go: (t) => go(t), today: () => today(),
       modName: (id) => modName(id), modPills: (c, a) => modPills(c, a), cardBody: (c) => cardBody(c), markCard: (id, lv) => markCard(id, lv),
       srsDue: (id) => srsDue(id), statusCounts: () => statusCounts(), allQ: () => ALLQ, qHour: (q) => qHour(q), book: () => BOOK,
-      cards: () => CARDS, card: (id) => CARDS.find((c) => c.id === id)
+      cards: () => CARDS, card: (id) => CARDS.find((c) => c.id === id),
+      quizHead: () => quizHead(), renderExam: () => renderExam()
     };
   }
 
@@ -430,7 +431,7 @@
   }
   const quizBase = () => ALLQ.filter((q) => (S.qMod === "all" || q.m === S.qMod) && srcMatch(q));
   const quizPool = () => quizBase().filter((q) => S.qMode !== "wrong" || S.wrong.includes(q.id));
-  const findQ = (id) => ALLQ.find((x) => x.id === id);
+  const findQ = (id) => ALLQ.find((x) => x.id === id) || QUIZ.concat(window.BANK || []).find((x) => x.id === id); // 被排除的题只在旧存档（进行中的模考）里还找得到
   function nextQ() {
     const all = quizPool();
     const pool = all.filter((q) => q.id !== S.qid);
@@ -530,7 +531,7 @@
     <h3>错题解析（${wrong.length}）</h3>
     ${wrong.map((q) => `<div class="panel" style="margin:8px 0"><div class="row"><span class="tag">${esc(modName(q.m))}</span><span class="tag">${esc(qSrcName(q))}</span></div>${qStem(q)}
       <p>你的答案：<b class="bad">${e.ans[q.id] != null ? "ABCD"[e.ans[q.id]] : "未答"}</b>　正确答案：<b class="ok">${"ABCD"[q.r]}. ${esc(q.o[q.r])}</b></p>
-      <p class="faint pre">${esc(q.w)}</p></div>`).join("")}`;
+      ${window.KD_QUIZ ? window.KD_QUIZ.brief(q) : ""}<p class="faint pre">${esc(q.w)}</p></div>`).join("")}`;
   }
   function examHistory() {
     if (!S.examLog.length) return "";

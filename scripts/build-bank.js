@@ -103,6 +103,7 @@ for (const s of sections) {
 
 const body = "// 由 scripts/build-bank.js 从《32 小时通关》练习题与模拟卷生成，勿手改。\nwindow.BANK = " + JSON.stringify(out) + ";\n";
 fs.writeFileSync(path.join(root, "交互学习面板", "bank.js"), body);
+require("./patch-bank.js").run();
 const by = {};
 out.forEach((q) => { by[q.m] = (by[q.m] || 0) + 1; });
 console.log("bank.js:", out.length, "questions, skipped", skipped, JSON.stringify(by));
