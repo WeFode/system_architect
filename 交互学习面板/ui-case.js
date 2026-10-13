@@ -4,6 +4,35 @@
   const MARKS = [["0", "不会"], ["1", "模糊"], ["2", "会了"]];
   const markRow = (act, id, cur) => MARKS.map(([v, n]) => `<button class="pill ${String(cur) === v ? "on" : ""}" data-act="${act}" data-v="${id}:${v}">${n}</button>`).join("");
 
+  function ensureCase(S) {
+    if (!S.caseParaOpen) S.caseParaOpen = {};
+    if (!S.caseParaDraft) S.caseParaDraft = {};
+  }
+  // 表格内容改写成可以直接交卷的分条段落：结论放第一句，每个维度一行。
+  function caseParagraph(item) {
+    const names = item.headers.slice(1);
+    const lines = item.rows.map((row, i) => {
+      const bits = names.map((name, si) => `${name}：${row[si + 1]}`).join("；");
+      return `（${i + 1}）${row[0]}。${bits}。`;
+    });
+    const close = String(item.tip || "").replace(/^(案例(?:分析)?踩分点：|口诀：)/, "");
+    return `结论：${close}\n${lines.join("\n")}`;
+  }
+  function caseTable(S, item, mask) {
+    const head = item.headers.map((h) => `<th>${esc(h)}</th>`).join("");
+    const body = item.rows.map((row, ri) => `<tr>${row.map((cell, ci) => {
+      const shown = !mask || caseShown(S, item, ri, ci);
+      const act = mask && ci > 0 ? ` data-act="casecell" data-v="${item.id}-${ri}-${ci}"` : "";
+      const inner = shown ? esc(cell) : `<span class="mask">点击显示</span>`;
+      return `<td${act}>${ci === 0 ? `<b>${inner}</b>` : inner}</td>`;
+    }).join("")}</tr>`).join("");
+    return `<div class="case-scroll"><table><tr>${head}</tr>${body}</table></div>`;
+  }
+  function answersOpen(S) {
+    if (S.caseMode === "para") return CASE_COMPARE.every((c) => S.caseParaOpen[c.id]);
+    return !!S.caseAll;
+  }
+
   // ---------- 对比题背默 ----------
   function caseShown(S, item, ri, ci) {
     if (S.caseMode !== "write" || ci === 0 || S.caseAll) return true;
@@ -20,37 +49,50 @@
     CASE_COMPARE.forEach((item) => caseKeys(item).forEach((k) => { S.caseOpen[k] = 1; }));
   }
   function caseList() {
-    const S = api.S, k = S.caseQ.trim().toLowerCase();
+    const S = api.S;
+    ensureCase(S);
+    const k = (S.caseQ || "").trim().toLowerCase();
     const items = CASE_COMPARE.filter((item) => {
       if (S.caseCat !== "all" && item.category !== S.caseCat) return false;
       if (!k) return true;
-      return [item.title, item.tip, item.category, ...item.headers, ...item.rows.flat()].join(" ").toLowerCase().includes(k);
+      return [item.title, item.tip, item.category, caseParagraph(item), ...item.headers, ...item.rows.flat()].join(" ").toLowerCase().includes(k);
     });
     if (!items.length) return `<div class="panel"><p>没有对上的对比题。换个分类，或把搜索词缩短。</p></div>`;
+    return items.map((item) => S.caseMode === "para" ? paraCard(S, item) : tableCard(S, item)).join("");
+  }
+  function tableCard(S, item) {
     const write = S.caseMode === "write";
-    return items.map((item) => {
-      const head = item.headers.map((h) => `<th>${esc(h)}</th>`).join("");
-      const body = item.rows.map((row, ri) => `<tr>${row.map((cell, ci) => {
-        const shown = caseShown(S, item, ri, ci);
-        const act = write && ci > 0 ? ` data-act="casecell" data-v="${item.id}-${ri}-${ci}"` : "";
-        const inner = shown ? esc(cell) : `<span class="mask">点击显示</span>`;
-        return `<td${act}>${ci === 0 ? `<b>${inner}</b>` : inner}</td>`;
-      }).join("")}</tr>`).join("");
-      return `<div class="panel" style="margin-bottom:14px">
-        <div class="row" style="justify-content:space-between"><b>${item.id}. ${esc(item.title)}</b><span class="tag">${esc(item.category)}</span></div>
-        <div class="case-scroll"><table><tr>${head}</tr>${body}</table></div>
-        <p class="sec pre" style="margin-top:10px"><span class="tag">踩分</span>${esc(item.tip)}</p>
-        ${write ? `<textarea class="note" data-bind="caseDraft.${item.id}" data-quiet placeholder="先写结论一句，再按维度列差异，最后扣题干原词。">${esc(S.caseDraft[item.id] || "")}</textarea>
-          <div class="row" style="margin-top:8px"><button data-act="casecard" data-v="${item.id}">显隐本题答案</button>${markRow("casemark", item.id, S.caseMark[item.id])}</div>` : `<div class="row" style="margin-top:8px">${markRow("casemark", item.id, S.caseMark[item.id])}</div>`}
-      </div>`;
-    }).join("");
+    return `<div class="panel" style="margin-bottom:14px">
+      <div class="row" style="justify-content:space-between"><b>${item.id}. ${esc(item.title)}</b><span class="tag">${esc(item.category)}</span></div>
+      ${caseTable(S, item, write)}
+      ${write ? "" : `<div class="sec pre"><span class="tag">直接作答</span>${esc(caseParagraph(item))}</div>`}
+      <p class="sec pre" style="margin-top:10px"><span class="tag">踩分</span>${esc(item.tip)}</p>
+      ${write ? `<textarea class="note" data-bind="caseDraft.${item.id}" data-quiet placeholder="先写结论一句，再按维度列差异，最后扣题干原词。">${esc(S.caseDraft[item.id] || "")}</textarea>
+        <div class="row" style="margin-top:8px"><button data-act="casecard" data-v="${item.id}">显隐本题答案</button>${markRow("casemark", item.id, S.caseMark[item.id])}</div>` : `<div class="row" style="margin-top:8px">${markRow("casemark", item.id, S.caseMark[item.id])}</div>`}
+    </div>`;
+  }
+  function paraCard(S, item) {
+    const shown = !!S.caseParaOpen[item.id];
+    const dims = item.rows.map((row) => `<li>${esc(row[0])}</li>`).join("");
+    return `<div class="panel" style="margin-bottom:14px">
+      <div class="row" style="justify-content:space-between"><b>${item.id}. ${esc(item.title)}</b><span class="tag">${esc(item.category)}</span></div>
+      <p class="faint" style="margin-top:8px">按这些维度写成可以直接交卷的段落：先一句结论，再逐条写各方案的差异。</p>
+      <ol class="case-dims">${dims}</ol>
+      <textarea class="note para" data-bind="caseParaDraft.${item.id}" data-quiet placeholder="（1）维度名。方案 A：……；方案 B：……。最后写结论和适用场景。">${esc(S.caseParaDraft[item.id] || "")}</textarea>
+      <div class="row" style="margin-top:8px"><button data-act="casepara" data-v="${item.id}">${shown ? "收起段落答案" : "显示段落答案"}</button>${markRow("casemark", item.id, S.caseMark[item.id])}</div>
+      ${shown ? `<div class="sec pre"><span class="tag">段落答案</span>${esc(caseParagraph(item))}</div>
+        <div style="margin-top:10px">${caseTable(S, item, false)}</div>
+        <p class="sec pre" style="margin-top:10px"><span class="tag">踩分</span>${esc(item.tip)}</p>` : ""}
+    </div>`;
   }
   function renderCmp() {
     const S = api.S;
+    ensureCase(S);
     const cats = ["all"].concat([...new Set(CASE_COMPARE.map((c) => c.category))]);
     const known = CASE_COMPARE.filter((c) => S.caseMark[c.id] === 2).length;
+    const writing = S.caseMode === "write" || S.caseMode === "para";
     return `
-      <p class="muted">对比选型题：背题直接看表，默写先遮住方案列，自己写完再点开核对。</p>
+      <p class="muted">对比选型题有两种交卷写法。背题同时看全表和直接作答段落；填表默写遮住方案列，逐格核对；段落默写按维度写成文字，写完再对段落答案。</p>
       <div class="grid g3" style="margin:12px 0">
         ${CASE_RULES.map(([t, d]) => `<div class="panel"><b>${esc(t)}</b><p class="faint" style="margin-top:6px">${esc(d)}</p></div>`).join("")}
       </div>
@@ -60,9 +102,10 @@
       </div>
       <div class="row" style="margin-bottom:14px">
         <button class="pill ${S.caseMode === "read" ? "on" : ""}" data-act="casemode" data-v="read">背题</button>
-        <button class="pill ${S.caseMode === "write" ? "on" : ""}" data-act="casemode" data-v="write">默写</button>
+        <button class="pill ${S.caseMode === "write" ? "on" : ""}" data-act="casemode" data-v="write">填表默写</button>
+        <button class="pill ${S.caseMode === "para" ? "on" : ""}" data-act="casemode" data-v="para">段落默写</button>
         <input class="wide" data-bind="caseQ" data-region="case" placeholder="搜索对比题，如 gRPC、权衡点" value="${esc(S.caseQ)}">
-        ${S.caseMode === "write" ? `<button data-act="caseall">${S.caseAll ? "隐藏全部答案" : "显示全部答案"}</button>` : ""}
+        ${writing ? `<button data-act="caseall">${answersOpen(S) ? "隐藏全部答案" : "显示全部答案"}</button>` : ""}
       </div>
       <div id="region-case">${caseList()}</div>`;
   }
@@ -161,7 +204,7 @@
 
   const setMark = (store, v) => { const i = v.lastIndexOf(":"); store[v.slice(0, i)] = +v.slice(i + 1); };
   return {
-    defaults: { caseSub: "cmp", caseMode: "read", caseCat: "all", caseQ: "", caseOpen: {}, caseDraft: {}, caseMark: {}, caseAll: false,
+    defaults: { caseSub: "cmp", caseMode: "read", caseCat: "all", caseQ: "", caseOpen: {}, caseDraft: {}, caseParaDraft: {}, caseParaOpen: {}, caseMark: {}, caseAll: false,
       realId: "28-1", realDraft: {}, realOpen: {}, realMark: {}, packId: "q1", packHide: false, packOpen: {} },
     tabs: { case: { name: "案例", render: renderCase, wide: true } },
     subs: { case: "caseSub" },
@@ -170,7 +213,23 @@
       casesub: (v) => { api.S.caseSub = v; },
       casemode: (v) => { api.S.caseMode = v; },
       casecat: (v) => { api.S.caseCat = v; },
-      caseall: () => { const S = api.S; if (S.caseAll) { S.caseAll = false; S.caseOpen = {}; } else S.caseAll = true; },
+      caseall: () => {
+        const S = api.S;
+        ensureCase(S);
+        if (S.caseMode === "para") {
+          const allOn = CASE_COMPARE.every((c) => S.caseParaOpen[c.id]);
+          S.caseParaOpen = {};
+          if (!allOn) CASE_COMPARE.forEach((c) => { S.caseParaOpen[c.id] = 1; });
+          return;
+        }
+        if (S.caseAll) { S.caseAll = false; S.caseOpen = {}; } else S.caseAll = true;
+      },
+      casepara: (v) => {
+        const S = api.S;
+        if (S.caseMode !== "para") return false;
+        ensureCase(S);
+        if (S.caseParaOpen[v]) delete S.caseParaOpen[v]; else S.caseParaOpen[v] = 1;
+      },
       casecell: (v) => {
         const S = api.S;
         if (S.caseMode !== "write") return false;
